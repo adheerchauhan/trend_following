@@ -14,7 +14,17 @@ import math
 import itertools
 import yfinance as yf
 import seaborn as sn
-# from IPython.core.display import display, HTML
+from IPython.core.display import display, HTML
+
+
+def jupyter_interactive_mode():
+    display(HTML(
+    '<style>'
+    '#notebook { padding-top:0px !important; }'
+    '.container { width:100% !important; }'
+    '.end_space { min-height:0px !important}'
+    '</style'
+    ))
 
 # Function to pull financial data for a ticker using Yahoo Finance's API
 def load_financial_data(start_date, end_date, ticker):
