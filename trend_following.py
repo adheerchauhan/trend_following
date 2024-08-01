@@ -162,11 +162,15 @@ def slope_signal(row):
         return 0
 
 
-def sharpe_ratio(df, return_col, trade_col, N=255, rf=0.01):
-    trade_cond = (df[trade_col].notnull())
-    mean = df[trade_cond][return_col].mean() * N - rf
-    sigma = df[trade_cond][return_col].std() * np.sqrt(N)
-    return mean / sigma
+def sharpe_ratio(df, strategy_daily_return_col, annual_trading_days=252, annual_rf=0.01):
+
+    daily_rf = (1 + annual_rf) ** (1/annual_trading_days) - 1
+    average_daily_return = df[strategy_daily_return_col].mean()
+    std_dev_daily_returns = df[strategy_daily_return_col].std()
+    daily_sharpe_ratio = (average_daily_return - daily_rf)/std_dev_daily_returns
+    annualized_sharpe_ratio = daily_sharpe_ratio * np.sqrt(annual_trading_days)
+
+    return annualized_sharpe_ratio
 
 
 def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, vol_range_list=[10, 20, 30, 60, 90],
