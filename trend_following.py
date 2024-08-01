@@ -28,7 +28,7 @@ def jupyter_interactive_mode():
 
 # Function to pull financial data for a ticker using Yahoo Finance's API
 def load_financial_data(start_date, end_date, ticker):
-    output_file=f'{ticker}-pickle-{start_date}-{end_date}'
+    output_file = f'data_folder/{ticker}-pickle-{start_date}-{end_date}'
     try:
         df = pd.read_pickle(output_file)
         print(f'File data found...reading {ticker} data')
@@ -36,6 +36,19 @@ def load_financial_data(start_date, end_date, ticker):
         print(f'File not found...downloading the {ticker} data')
         df = yf.download(ticker, start=start_date, end=end_date)
         df.to_pickle(output_file)
+    return df
+
+
+def get_close_prices(start_date, end_date, ticker, close_col='Adj Close'):
+    if isinstance(ticker, str):
+        ticker = [ticker]
+    df = load_financial_data(start_date, end_date, ticker)
+    if len(ticker) > 1:
+        df = df[close_col]
+    else:
+        df = df[[close_col]]
+        df.columns = ticker
+
     return df
 
 
@@ -156,9 +169,13 @@ def sharpe_ratio(df, return_col, trade_col, N=255, rf=0.01):
     return mean / sigma
 
 
-def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, vol_range_list=[10, 20, 30, 60, 90]):
+def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, vol_range_list=[10, 20, 30, 60, 90],
+                          moving_avg_type='simple'):
     for window in np.linspace(mavg_start, mavg_end, mavg_stepsize):
-        df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}'].rolling(int(window)).mean()
+        if moving_avg_type == 'simple':
+            df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}'].rolling(int(window)).mean()
+        else:
+            df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}'].ewm(span=window).mean()
         df[f'{ticker}_{int(window)}_mavg_slope'] = calculate_slope(df, column=f'{ticker}_{int(window)}_mavg',
                                                                    periods=window)
 
