@@ -174,12 +174,20 @@ def sharpe_ratio(df, strategy_daily_return_col, annual_trading_days=252, annual_
 
 
 def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, vol_range_list=[10, 20, 30, 60, 90],
-                          moving_avg_type='simple'):
+                          moving_avg_type='simple', price_or_returns_calc='price'):
+    df[f'{ticker}_pct_returns'] = df[ticker].pct_change()
+
     for window in np.linspace(mavg_start, mavg_end, mavg_stepsize):
         if moving_avg_type == 'simple':
-            df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}'].rolling(int(window)).mean()
-        else:
-            df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}'].ewm(span=window).mean()
+            if price_or_returns_calc == 'price':
+                df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}'].rolling(int(window)).mean()
+            elif price_or_returns_calc == 'returns':
+                df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}_pct_returns'].rolling(int(window)).mean()
+        elif moving_avg_type == 'exponential':
+            if price_or_returns_calc == 'price':
+                df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}'].ewm(span=window).mean()
+            elif price_or_returns_calc == 'returns':
+                df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}_pct_returns'].ewm(span=window).mean()
         df[f'{ticker}_{int(window)}_mavg_slope'] = calculate_slope(df, column=f'{ticker}_{int(window)}_mavg',
                                                                    periods=window)
 
@@ -190,27 +198,29 @@ def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, vol_r
     mavg_col_list = [f'{ticker}_{int(mavg)}_mavg' for mavg in np.linspace(mavg_start, mavg_end, mavg_stepsize).tolist()]
     mavg_slope_col_list = [f'{ticker}_{int(mavg)}_mavg_slope' for mavg in
                            np.linspace(mavg_start, mavg_end, mavg_stepsize).tolist()]
-    df[f'{ticker}_trend_signal'] = df[mavg_col_list].apply(trend_signal, axis=1)
-    df[f'{ticker}_trend_signal_diff'] = df[f'{ticker}_trend_signal'].diff().shift(1)
-    df[f'{ticker}_trend_trade'] = np.where(df[f'{ticker}_trend_signal_diff'] != 0, df[f'{ticker}'], np.nan)
-    df[f'{ticker}_trend_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_trend_signal_diff']
+    df[f'{ticker}_trend_signal'] = df[mavg_col_list].apply(trend_signal, axis=1).shift(1)
+    # df[f'{ticker}_trend_signal_diff'] = df[f'{ticker}_trend_signal'].diff().shift(1)
+    # df[f'{ticker}_trend_trade'] = np.where(df[f'{ticker}_trend_signal_diff'] != 0, df[f'{ticker}'], 0)
+    # df[f'{ticker}_trend_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_trend_signal_diff']
+    df[f'{ticker}_trend_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_trend_signal']
 
     ## Ticker Trend Slope Signal and Trade
     df[f'{ticker}_trend_slope_signal'] = df[mavg_slope_col_list].apply(slope_signal, axis=1)
-    df[f'{ticker}_trend_slope_signal_diff'] = df[f'{ticker}_trend_slope_signal'].diff().shift(1)
-    df[f'{ticker}_trend_slope_trade'] = np.where(df[f'{ticker}_trend_slope_signal_diff'] != 0, df[f'{ticker}'], np.nan)
-    df[f'{ticker}_trend_slope_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_trend_slope_signal_diff']
+    # df[f'{ticker}_trend_slope_signal_diff'] = df[f'{ticker}_trend_slope_signal'].diff().shift(1)
+    # df[f'{ticker}_trend_slope_trade'] = np.where(df[f'{ticker}_trend_slope_signal_diff'] != 0, df[f'{ticker}'], 0)
+    # df[f'{ticker}_trend_slope_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_trend_slope_signal_diff']
+    df[f'{ticker}_trend_slope_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_trend_slope_signal']
 
     ## Drop all null values
     df = df[df[f'{ticker}_{mavg_end}_mavg_slope'].notnull()]
 
     ## Calculate P&L
-    df[f'{ticker}_mavg_trend_PnL'] = df[f'{ticker}_trend_signal_diff'] * df[f'{ticker}_trend_trade'] * -1
-    df[f'{ticker}_mavg_slope_PnL'] = df[f'{ticker}_trend_slope_signal_diff'] * df[f'{ticker}_trend_slope_trade'] * -1
+    # df[f'{ticker}_mavg_trend_PnL'] = df[f'{ticker}_trend_signal_diff'] * df[f'{ticker}_trend_trade'] * -1
+    # df[f'{ticker}_mavg_slope_PnL'] = df[f'{ticker}_trend_slope_signal_diff'] * df[f'{ticker}_trend_slope_trade'] * -1
 
     ## Calculate Cumulative P&L
-    df[f'{ticker}_mavg_trend_PnL_cum'] = df[f'{ticker}_mavg_trend_PnL'].cumsum()
-    df[f'{ticker}_mavg_slope_PnL_cum'] = df[f'{ticker}_mavg_slope_PnL'].cumsum()
+    # df[f'{ticker}_mavg_trend_PnL_cum'] = df[f'{ticker}_mavg_trend_PnL'].cumsum()
+    # df[f'{ticker}_mavg_slope_PnL_cum'] = df[f'{ticker}_mavg_slope_PnL'].cumsum()
 
     return df
 
