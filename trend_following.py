@@ -27,13 +27,15 @@ def jupyter_interactive_mode():
     ))
 
 # Function to pull financial data for a ticker using Yahoo Finance's API
-def load_financial_data(start_date, end_date, ticker):
+def load_financial_data(start_date, end_date, ticker, print_status=True):
     output_file = f'data_folder/{ticker}-pickle-{start_date}-{end_date}'
     try:
         df = pd.read_pickle(output_file)
-        print(f'File data found...reading {ticker} data')
+        if print_status:
+            print(f'File data found...reading {ticker} data')
     except FileNotFoundError:
-        print(f'File not found...downloading the {ticker} data')
+        if print_status:
+            print(f'File not found...downloading the {ticker} data')
         df = yf.download(ticker, start=start_date, end=end_date)
         df.to_pickle(output_file)
     return df
@@ -196,8 +198,9 @@ def sharpe_ratio(df, strategy_daily_return_col, strategy_trade_count_col, annual
     return annualized_sharpe_ratio
 
 
-def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, vol_range_list=[10, 20, 30, 60, 90],
-                          moving_avg_type='simple', price_or_returns_calc='price'):
+def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, slope_window,
+                          vol_range_list=[10, 20, 30, 60, 90], moving_avg_type='simple',
+                          price_or_returns_calc='price'):
 
     df[f'{ticker}_pct_returns'] = df[ticker].pct_change()
 
@@ -213,9 +216,10 @@ def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, vol_r
             elif price_or_returns_calc == 'returns':
                 df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}_pct_returns'].ewm(span=window).mean()
         df[f'{ticker}_{int(window)}_mavg_slope'] = calculate_slope(df, column=f'{ticker}_{int(window)}_mavg',
-                                                                   periods=window)
+                                                                   periods=slope_window)
 
-    df[f'{ticker}_ribbon_thickness'] = df[f'{ticker}_{int(mavg_start)}_mavg'] - df[f'{ticker}_{int(mavg_end)}_mavg']
+    df[f'{ticker}_ribbon_thickness'] = (df[f'{ticker}_{int(mavg_start)}_mavg'] -
+                                        df[f'{ticker}_{int(mavg_end)}_mavg']).shift(1)
     df = get_returns_volatility(df, vol_range_list=vol_range_list, close_px_col=ticker)
 
     ## Ticker Trend Signal and Trade
@@ -236,7 +240,7 @@ def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, vol_r
     #             (df[f'{ticker}_trend_strategy_trades'] * (transaction_cost_est + average_fee_per_trade)))
 
     ## Ticker Trend Slope Signal and Trade
-    df[f'{ticker}_trend_slope_signal'] = df[mavg_slope_col_list].apply(slope_signal, axis=1)
+    df[f'{ticker}_trend_slope_signal'] = df[mavg_slope_col_list].apply(slope_signal, axis=1).shift(1)
     # df[f'{ticker}_trend_slope_signal_diff'] = df[f'{ticker}_trend_slope_signal'].diff().shift(1)
     # df[f'{ticker}_trend_slope_trade'] = np.where(df[f'{ticker}_trend_slope_signal_diff'] != 0, df[f'{ticker}'], 0)
     # df[f'{ticker}_trend_slope_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_trend_slope_signal_diff']
