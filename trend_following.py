@@ -164,38 +164,26 @@ def slope_signal(row):
         return 0
 
 
-def estimate_fee_per_trade(passive_trade_rate=0.5):
-    ## Maker/Taker Fee based on lowest tier at Coinbase
-    maker_fee = 0.006  # 0.6%
-    taker_fee = 0.012  # 1.20%
-    proportion_maker = passive_trade_rate
-    proportion_taker = (1 - passive_trade_rate)
-
-    average_fee_per_trade = (maker_fee * proportion_maker) + (taker_fee * proportion_taker)
-
-    return average_fee_per_trade
-
-
-def sharpe_ratio(df, strategy_daily_return_col, strategy_trade_count_col, annual_trading_days=252, annual_rf=0.01,
-                 include_transaction_costs_and_fees=True, transaction_cost_est=0.001, passive_trade_rate=0.5):
-
-    daily_rf = (1 + annual_rf) ** (1/annual_trading_days) - 1
-    if include_transaction_costs_and_fees:
-        average_fee_per_trade = estimate_fee_per_trade(passive_trade_rate=passive_trade_rate)
-        average_daily_return = (
-                df[strategy_daily_return_col] - np.abs(df[strategy_trade_count_col]) *
-                (transaction_cost_est + average_fee_per_trade)).mean()
-        std_dev_daily_return = (
-                df[strategy_daily_return_col] - np.abs(df[strategy_trade_count_col]) *
-                (transaction_cost_est + average_fee_per_trade)).std()
-    else:
-        average_daily_return = df[strategy_daily_return_col].mean()
-        std_dev_daily_return = df[strategy_daily_return_col].std()
-
-    daily_sharpe_ratio = (average_daily_return - daily_rf)/std_dev_daily_return
-    annualized_sharpe_ratio = daily_sharpe_ratio * np.sqrt(annual_trading_days)
-
-    return annualized_sharpe_ratio
+# def sharpe_ratio(df, strategy_daily_return_col, strategy_trade_count_col, annual_trading_days=252, annual_rf=0.01,
+#                  include_transaction_costs_and_fees=True, transaction_cost_est=0.001, passive_trade_rate=0.5):
+#
+#     daily_rf = (1 + annual_rf) ** (1/annual_trading_days) - 1
+#     if include_transaction_costs_and_fees:
+#         average_fee_per_trade = estimate_fee_per_trade(passive_trade_rate=passive_trade_rate)
+#         average_daily_return = (
+#                 df[strategy_daily_return_col] - np.abs(df[strategy_trade_count_col]) *
+#                 (transaction_cost_est + average_fee_per_trade)).mean()
+#         std_dev_daily_return = (
+#                 df[strategy_daily_return_col] - np.abs(df[strategy_trade_count_col]) *
+#                 (transaction_cost_est + average_fee_per_trade)).std()
+#     else:
+#         average_daily_return = df[strategy_daily_return_col].mean()
+#         std_dev_daily_return = df[strategy_daily_return_col].std()
+#
+#     daily_sharpe_ratio = (average_daily_return - daily_rf)/std_dev_daily_return
+#     annualized_sharpe_ratio = daily_sharpe_ratio * np.sqrt(annual_trading_days)
+#
+#     return annualized_sharpe_ratio
 
 
 def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, slope_window,
