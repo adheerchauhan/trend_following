@@ -158,8 +158,8 @@ def calculate_annualized_std_dev(df, strategy_daily_return_col, strategy_trade_c
     return annualized_std_dev
 
 
-def sharpe_ratio(df, strategy_daily_return_col, strategy_trade_count_col, annual_trading_days=252, annual_rf=0.01,
-                 include_transaction_costs_and_fees=True, transaction_cost_est=0.001, passive_trade_rate=0.5):
+def calculate_sharpe_ratio(df, strategy_daily_return_col, strategy_trade_count_col, annual_trading_days=252, annual_rf=0.01,
+                           include_transaction_costs_and_fees=True, transaction_cost_est=0.001, passive_trade_rate=0.5):
 
     daily_rf = (1 + annual_rf) ** (1/annual_trading_days) - 1
     if include_transaction_costs_and_fees:
