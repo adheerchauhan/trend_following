@@ -192,19 +192,19 @@ def calculate_risk_and_performance_metrics(df, strategy_daily_return_col, strate
                                        transaction_cost_est=transaction_cost_est, passive_trade_rate=passive_trade_rate)
 
     # Calculate Annualized Sharpe Ratio
-    annualized_sharpe_ratio = sharpe_ratio(df, strategy_daily_return_col=strategy_daily_return_col,
-                                           strategy_trade_count_col=strategy_trade_count_col,
-                                           annual_trading_days=annual_trading_days, annual_rf=annual_rf,
-                                           include_transaction_costs_and_fees=include_transaction_costs_and_fees,
-                                           transaction_cost_est=transaction_cost_est,
-                                           passive_trade_rate=passive_trade_rate)
+    annualized_sharpe_ratio = calculate_sharpe_ratio(df, strategy_daily_return_col=strategy_daily_return_col,
+                                                     strategy_trade_count_col=strategy_trade_count_col,
+                                                     annual_trading_days=annual_trading_days, annual_rf=annual_rf,
+                                                     include_transaction_costs_and_fees=include_transaction_costs_and_fees,
+                                                     transaction_cost_est=transaction_cost_est,
+                                                     passive_trade_rate=passive_trade_rate)
 
     # Calculate Calmar Ratio
-    calmar_ratio = sharpe_ratio(df, strategy_daily_return_col=strategy_daily_return_col,
-                                strategy_trade_count_col=strategy_trade_count_col,
-                                annual_trading_days=annual_trading_days,
-                                include_transaction_costs_and_fees=include_transaction_costs_and_fees,
-                                transaction_cost_est=transaction_cost_est, passive_trade_rate=passive_trade_rate)
+    calmar_ratio = calculate_calmar_ratio(df, strategy_daily_return_col=strategy_daily_return_col,
+                                          strategy_trade_count_col=strategy_trade_count_col,
+                                          annual_trading_days=annual_trading_days,
+                                          include_transaction_costs_and_fees=include_transaction_costs_and_fees,
+                                          transaction_cost_est=transaction_cost_est, passive_trade_rate=passive_trade_rate)
 
     # Calculate Annualized Standard Deviation
     annualized_std_dev = calculate_annualized_std_dev(
