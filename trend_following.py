@@ -41,10 +41,10 @@ def load_financial_data(start_date, end_date, ticker, print_status=True):
     return df
 
 
-def get_close_prices(start_date, end_date, ticker, close_col='Adj Close'):
+def get_close_prices(start_date, end_date, ticker, close_col='Adj Close', print_status=True):
     if isinstance(ticker, str):
         ticker = [ticker]
-    df = load_financial_data(start_date, end_date, ticker)
+    df = load_financial_data(start_date, end_date, ticker, print_status)
     if len(ticker) > 1:
         df = df[close_col]
     else:
@@ -155,6 +155,7 @@ def trend_signal(row):
     else:
         return 0
 
+
 def slope_signal(row):
     if all(row[i] <= row[i+1] for i in range(len(row) - 1)):
         return -1
@@ -162,28 +163,6 @@ def slope_signal(row):
         return 1
     else:
         return 0
-
-
-# def sharpe_ratio(df, strategy_daily_return_col, strategy_trade_count_col, annual_trading_days=252, annual_rf=0.01,
-#                  include_transaction_costs_and_fees=True, transaction_cost_est=0.001, passive_trade_rate=0.5):
-#
-#     daily_rf = (1 + annual_rf) ** (1/annual_trading_days) - 1
-#     if include_transaction_costs_and_fees:
-#         average_fee_per_trade = estimate_fee_per_trade(passive_trade_rate=passive_trade_rate)
-#         average_daily_return = (
-#                 df[strategy_daily_return_col] - np.abs(df[strategy_trade_count_col]) *
-#                 (transaction_cost_est + average_fee_per_trade)).mean()
-#         std_dev_daily_return = (
-#                 df[strategy_daily_return_col] - np.abs(df[strategy_trade_count_col]) *
-#                 (transaction_cost_est + average_fee_per_trade)).std()
-#     else:
-#         average_daily_return = df[strategy_daily_return_col].mean()
-#         std_dev_daily_return = df[strategy_daily_return_col].std()
-#
-#     daily_sharpe_ratio = (average_daily_return - daily_rf)/std_dev_daily_return
-#     annualized_sharpe_ratio = daily_sharpe_ratio * np.sqrt(annual_trading_days)
-#
-#     return annualized_sharpe_ratio
 
 
 def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, slope_window,
@@ -215,42 +194,16 @@ def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, slope
     mavg_slope_col_list = [f'{ticker}_{int(mavg)}_mavg_slope' for mavg in
                            np.linspace(mavg_start, mavg_end, mavg_stepsize).tolist()]
     df[f'{ticker}_trend_signal'] = df[mavg_col_list].apply(trend_signal, axis=1).shift(1)
-    # df[f'{ticker}_trend_signal_diff'] = df[f'{ticker}_trend_signal'].diff().shift(1)
-    # df[f'{ticker}_trend_trade'] = np.where(df[f'{ticker}_trend_signal_diff'] != 0, df[f'{ticker}'], 0)
-    # df[f'{ticker}_trend_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_trend_signal_diff']
     df[f'{ticker}_trend_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_trend_signal']
     df[f'{ticker}_trend_strategy_trades'] = df[f'{ticker}_trend_signal'].diff()
 
-    # if include_transaction_costs_and_fees:
-    #     average_fee_per_trade = estimate_fee_per_trade(passive_trade_rate=passive_trade_rate)
-    #     df[f'{ticker}_trend_strategy_returns'] = (
-    #             df[f'{ticker}_trend_strategy_returns'] -
-    #             (df[f'{ticker}_trend_strategy_trades'] * (transaction_cost_est + average_fee_per_trade)))
-
     ## Ticker Trend Slope Signal and Trade
     df[f'{ticker}_trend_slope_signal'] = df[mavg_slope_col_list].apply(slope_signal, axis=1).shift(1)
-    # df[f'{ticker}_trend_slope_signal_diff'] = df[f'{ticker}_trend_slope_signal'].diff().shift(1)
-    # df[f'{ticker}_trend_slope_trade'] = np.where(df[f'{ticker}_trend_slope_signal_diff'] != 0, df[f'{ticker}'], 0)
-    # df[f'{ticker}_trend_slope_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_trend_slope_signal_diff']
     df[f'{ticker}_trend_slope_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_trend_slope_signal']
     df[f'{ticker}_trend_slope_strategy_trades'] = df[f'{ticker}_trend_slope_signal'].diff()
 
-    # if include_transaction_costs_and_fees:
-    #     average_fee_per_trade = estimate_fee_per_trade(passive_trade_rate=passive_trade_rate)
-    #     df[f'{ticker}_trend_slope_strategy_returns'] = (
-    #             df[f'{ticker}_trend_slope_strategy_returns'] -
-    #             (df[f'{ticker}_trend_slope_strategy_trades'] * (transaction_cost_est + average_fee_per_trade)))
-
     ## Drop all null values
     df = df[df[f'{ticker}_{mavg_end}_mavg_slope'].notnull()]
-
-    ## Calculate P&L
-    # df[f'{ticker}_mavg_trend_PnL'] = df[f'{ticker}_trend_signal_diff'] * df[f'{ticker}_trend_trade'] * -1
-    # df[f'{ticker}_mavg_slope_PnL'] = df[f'{ticker}_trend_slope_signal_diff'] * df[f'{ticker}_trend_slope_trade'] * -1
-
-    ## Calculate Cumulative P&L
-    # df[f'{ticker}_mavg_trend_PnL_cum'] = df[f'{ticker}_mavg_trend_PnL'].cumsum()
-    # df[f'{ticker}_mavg_slope_PnL_cum'] = df[f'{ticker}_mavg_slope_PnL'].cumsum()
 
     return df
 
