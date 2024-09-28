@@ -204,7 +204,8 @@ def calculate_risk_and_performance_metrics(df, strategy_daily_return_col, strate
                                           strategy_trade_count_col=strategy_trade_count_col,
                                           annual_trading_days=annual_trading_days,
                                           include_transaction_costs_and_fees=include_transaction_costs_and_fees,
-                                          transaction_cost_est=transaction_cost_est, passive_trade_rate=passive_trade_rate)
+                                          transaction_cost_est=transaction_cost_est,
+                                          passive_trade_rate=passive_trade_rate)
 
     # Calculate Annualized Standard Deviation
     annualized_std_dev = calculate_annualized_std_dev(
