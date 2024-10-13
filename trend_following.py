@@ -26,6 +26,7 @@ def jupyter_interactive_mode():
     '</style'
     ))
 
+
 # Function to pull financial data for a ticker using Yahoo Finance's API
 def load_financial_data(start_date, end_date, ticker, print_status=True):
     output_file = f'data_folder/{ticker}-pickle-{start_date}-{end_date}'
