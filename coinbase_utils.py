@@ -3,6 +3,7 @@ import time
 import requests.exceptions
 from json import dumps
 import pandas as pd
+import datetime
 import os
 
 
@@ -91,3 +92,47 @@ def get_coinbase_daily_historical_price_data(client, ticker, start_timestamp, en
 
     # If all retries fail, raise the error
     raise Exception("Max retries exceeded. Could not connect to Coinbase API.")
+
+
+def save_historical_crypto_prices_from_coinbase(start_date, end_date, ticker, save_to_file=False):
+
+    client = get_coinbase_rest_api_client(key_location)
+    start_date = pd.Timestamp(start_date)
+    temp_start_date = start_date
+    end_date = pd.Timestamp(end_date)
+    current_end_date = temp_start_date
+    crypto_price_list = []
+    while current_end_date < end_date:
+        current_end_date = pd.to_datetime(temp_start_date) + datetime.timedelta(weeks=6)
+        if current_end_date > end_date:
+            current_end_date = end_date
+        start_timestamp = int(temp_start_date.timestamp())
+        end_timestamp = int(current_end_date.timestamp())
+        print(temp_start_date, current_end_date, end_date)
+        crypto_price_list.append(
+            get_coinbase_daily_historical_price_data(client, ticker, start_timestamp, end_timestamp))
+        temp_start_date = pd.to_datetime(current_end_date) + datetime.timedelta(days=1)
+
+    df = pd.concat(crypto_price_list, axis=0)
+
+    if save_to_file:
+        filename = f"{ticker}-pickle-{start_date.strftime('%Y-%m-%d')}-{end_date.strftime('%Y-%m-%d')}"
+        output_file = f'coinbase_historical_price_folder/{filename}'
+        df.to_pickle(output_file)
+
+    return df
+
+
+def get_coinbase_ohlc_data(ticker):
+    pickle_file_path = f"{os.environ.get('HOME')}/Documents/git/trend_following/coinbase_historical_price_folder/"
+    files = os.listdir(pickle_file_path)
+    matching_files = [f for f in files if f.startswith(ticker)]
+
+    if not matching_files:
+        raise FileNotFoundError(f"No file for {ticker} is found!!!")
+
+    file_to_load = os.path.join(pickle_file_path, matching_files[0])
+    df = pd.read_pickle(file_to_load)
+
+    return df
+

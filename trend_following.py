@@ -13,6 +13,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import math
 import itertools
 import yfinance as yf
+import coinbase_utils as cn
 import seaborn as sn
 from IPython.display import display, HTML
 
@@ -215,19 +216,23 @@ def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, slope
 
 
 def calculate_keltner_channels(start_date, end_date, ticker, price_or_returns_calc='price', rolling_atr_window=20,
-                               upper_atr_multiplier=2, lower_atr_multiplier=2):
-    df = load_financial_data(start_date, end_date, ticker, print_status=False)  # .shift(1)
-    df.columns = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
+                               upper_atr_multiplier=2, lower_atr_multiplier=2, use_coinbase_data=True):
+    if use_coinbase_data:
+        df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
+    else:
+        df = load_financial_data(start_date, end_date, ticker, print_status=False)  # .shift(1)
+        df.columns = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
 
     if price_or_returns_calc == 'price':
         # Calculate the Exponential Moving Average (EMA)
-        df[f'{ticker}_{rolling_atr_window}_ema_price'] = df['adjclose'].ewm(span=rolling_atr_window,
+        df[f'{ticker}_{rolling_atr_window}_ema_price'] = df['close'].ewm(span=rolling_atr_window,
                                                                             adjust=False).mean()
 
         # Calculate the True Range (TR) and Average True Range (ATR)
         df[f'{ticker}_high-low'] = df['high'] - df['low']
-        df[f'{ticker}_high-close'] = np.abs(df['high'] - df['adjclose'].shift(1))
-        df[f'{ticker}_low-close'] = np.abs(df['low'] - df['adjclose'].shift(1))
+        df[f'{ticker}_high-close'] = np.abs(df['high'] - df['close'].shift(1))
+        df[f'{ticker}_low-close'] = np.abs(df['low'] - df['close'].shift(1))
         df[f'{ticker}_true_range_price'] = df[
             [f'{ticker}_high-low', f'{ticker}_high-close', f'{ticker}_low-close']].max(axis=1)
         df[f'{ticker}_{rolling_atr_window}_avg_true_range_price'] = df[f'{ticker}_true_range_price'].ewm(
@@ -235,7 +240,7 @@ def calculate_keltner_channels(start_date, end_date, ticker, price_or_returns_ca
 
     elif price_or_returns_calc == 'returns':
         # Calculate Percent Returns
-        df[f'{ticker}_pct_returns'] = df[f'adjclose'].pct_change()
+        df[f'{ticker}_pct_returns'] = df[f'close'].pct_change()
 
         # Calculate Middle Line as the EMA of returns
         df[f'{ticker}_{rolling_atr_window}_ema_returns'] = df[f'{ticker}_pct_returns'].ewm(span=rolling_atr_window,
@@ -270,22 +275,26 @@ def calculate_keltner_channels(start_date, end_date, ticker, price_or_returns_ca
 
 
 def calculate_donchian_channels(start_date, end_date, ticker, price_or_returns_calc='price',
-                                rolling_donchian_window=20):
-    df = load_financial_data(start_date, end_date, ticker, print_status=False)
-    df.columns = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
+                                rolling_donchian_window=20, use_coinbase_data=True):
+    if use_coinbase_data:
+        df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
+    else:
+        df = load_financial_data(start_date, end_date, ticker, print_status=False)  # .shift(1)
+        df.columns = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
 
     if price_or_returns_calc == 'price':
         # Rolling maximum of returns (upper channel)
         df[f'{ticker}_{rolling_donchian_window}_donchian_upper_band_{price_or_returns_calc}'] = (
-            df[f'adjclose'].rolling(window=rolling_donchian_window).max())
+            df[f'close'].rolling(window=rolling_donchian_window).max())
 
         # Rolling minimum of returns (lower channel)
         df[f'{ticker}_{rolling_donchian_window}_donchian_lower_band_{price_or_returns_calc}'] = (
-            df[f'adjclose'].rolling(window=rolling_donchian_window).min())
+            df[f'close'].rolling(window=rolling_donchian_window).min())
 
     elif price_or_returns_calc == 'returns':
         # Calculate Percent Returns
-        df[f'{ticker}_pct_returns'] = df[f'adjclose'].pct_change()
+        df[f'{ticker}_pct_returns'] = df[f'close'].pct_change()
 
         # Rolling maximum of returns (upper channel)
         df[f'{ticker}_{rolling_donchian_window}_donchian_upper_band_{price_or_returns_calc}'] = df[
@@ -312,10 +321,16 @@ def calculate_donchian_channels(start_date, end_date, ticker, price_or_returns_c
 
 
 def generate_rsi_signal(start_date, end_date, ticker, rolling_rsi_period=14, rsi_overbought_threshold=70,
-                        rsi_oversold_threshold=30,
-                        rsi_mavg_type='exponential', price_or_returns_calc='price'):
+                        rsi_oversold_threshold=30, rsi_mavg_type='exponential', price_or_returns_calc='price',
+                        use_coinbase_data=True):
     # Get Close Prices
-    df = get_close_prices(start_date, end_date, ticker, print_status=False)
+    if use_coinbase_data:
+        df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
+        df = df[['close']].rename(columns={'close': f'{ticker}'})
+    else:
+        df = get_close_prices(start_date, end_date, ticker, print_status=False)
+
     df[f'{ticker}_pct_returns'] = df[f'{ticker}'].pct_change()
 
     if price_or_returns_calc == 'price':
@@ -370,12 +385,18 @@ def generate_rsi_signal(start_date, end_date, ticker, rolling_rsi_period=14, rsi
     return df
 
 
-def generate_volume_oscillator_signal(start_date, end_date, ticker, fast_mavg, slow_mavg, mavg_stepsize, moving_avg_type='simple'):
+def generate_volume_oscillator_signal(start_date, end_date, ticker, fast_mavg, slow_mavg, mavg_stepsize,
+                                      moving_avg_type='simple', use_coinbase_data=True):
 
-    df = load_financial_data(start_date, end_date, ticker, print_status=False)
-    df.columns = ['open','high','low','close','adjclose','volume']
+    if use_coinbase_data:
+        df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
+    else:
+        df = load_financial_data(start_date, end_date, ticker, print_status=False)  # .shift(1)
+        df.columns = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
+
     df.columns = [f'{ticker}_{x}' for x in df.columns]
-    df[f'{ticker}_pct_returns'] = df[f'{ticker}_adjclose'].pct_change()
+    df[f'{ticker}_pct_returns'] = df[f'{ticker}_close'].pct_change()
 
     for window in np.linspace(fast_mavg, slow_mavg, mavg_stepsize):
         if moving_avg_type == 'simple':
@@ -383,7 +404,7 @@ def generate_volume_oscillator_signal(start_date, end_date, ticker, fast_mavg, s
         elif moving_avg_type == 'exponential':
             df[f'{ticker}_volume_{int(window)}_mavg'] = df[f'{ticker}_volume'].ewm(span=window).mean()
 
-    ## Ticker Trend Signal and Trade
+    ## Ticker Trend Signal and Trades
     mavg_col_list = [f'{ticker}_volume_{int(mavg)}_mavg'
                      for mavg in np.linspace(fast_mavg, slow_mavg, mavg_stepsize).tolist()]
     df[f'{ticker}_volume_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_trend_signal'] = (
@@ -399,17 +420,22 @@ def generate_volume_oscillator_signal(start_date, end_date, ticker, fast_mavg, s
     return df
 
 
-def calculate_on_balance_volume(start_date, end_date, ticker):
-    df = load_financial_data(start_date, end_date, ticker, print_status=False)
-    df.columns = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
+def calculate_on_balance_volume(start_date, end_date, ticker, use_coinbase_data=True):
+    if use_coinbase_data:
+        df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
+    else:
+        df = load_financial_data(start_date, end_date, ticker, print_status=False)
+        df.columns = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
+
     df.columns = [f'{ticker}_{x}' for x in df.columns]
 
     obv_list = [0]
     # Loop through the data from the second row onwards
     for i in range(1, len(df)):
-        if df[f'{ticker}_adjclose'].iloc[i] > df[f'{ticker}_adjclose'].iloc[i - 1]:
+        if df[f'{ticker}_close'].iloc[i] > df[f'{ticker}_close'].iloc[i - 1]:
             obv_list.append(obv_list[-1] + df[f'{ticker}_volume'].iloc[i])  # Add today's volume
-        elif df[f'{ticker}_adjclose'].iloc[i] < df[f'{ticker}_adjclose'].iloc[i - 1]:
+        elif df[f'{ticker}_close'].iloc[i] < df[f'{ticker}_close'].iloc[i - 1]:
             obv_list.append(obv_list[-1] - df[f'{ticker}_volume'].iloc[i])  # Subtract today's volume
         else:
             obv_list.append(obv_list[-1])  # No change in OBV if price remains the same
@@ -423,7 +449,7 @@ def calculate_on_balance_volume(start_date, end_date, ticker):
     df[f'{ticker}_obv_signal'] = df[f'{ticker}_obv_signal'].shift(1)
 
     ## Calculate Returns
-    df[f'{ticker}_pct_returns'] = df[f'{ticker}_adjclose'].pct_change()
+    df[f'{ticker}_pct_returns'] = df[f'{ticker}_close'].pct_change()
     df[f'{ticker}_obv_strategy_returns'] = df[f'{ticker}_pct_returns'] * df[f'{ticker}_obv_signal']
     df[f'{ticker}_obv_strategy_trades'] = df[f'{ticker}_obv_signal'].diff()
 
