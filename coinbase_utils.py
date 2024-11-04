@@ -94,9 +94,21 @@ def get_coinbase_daily_historical_price_data(client, ticker, start_timestamp, en
     raise Exception("Max retries exceeded. Could not connect to Coinbase API.")
 
 
-def save_historical_crypto_prices_from_coinbase(start_date, end_date, ticker, save_to_file=False):
+def save_historical_crypto_prices_from_coinbase(ticker, end_date, save_to_file=False):
 
     client = get_coinbase_rest_api_client(key_location)
+    start_date_dict = {
+        'BTC-USD': '2016-01-01',
+        'ETH-USD': '2016-05-01',
+        'SOL-USD': '2021-06-01',
+        'LTC-USD': '2021-08-01',
+        'DOGE-USD': '2021-05-01'
+    }
+    start_date = start_date_dict.get(ticker)
+    if not start_date:
+        print(f"Start date for {ticker} is not included in the dictionary!")
+        return None
+
     start_date = pd.Timestamp(start_date)
     temp_start_date = start_date
     end_date = pd.Timestamp(end_date)

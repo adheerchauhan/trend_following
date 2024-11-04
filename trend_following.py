@@ -172,8 +172,7 @@ def slope_signal(row):
         return 0
 
 
-def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, slope_window,
-                          vol_range_list=[10, 20, 30, 60, 90], moving_avg_type='simple',
+def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, slope_window, moving_avg_type='simple',
                           price_or_returns_calc='price'):
 
     df[f'{ticker}_pct_returns'] = df[ticker].pct_change()
@@ -194,7 +193,6 @@ def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, slope
 
     df[f'{ticker}_ribbon_thickness'] = (df[f'{ticker}_{int(mavg_start)}_mavg'] -
                                         df[f'{ticker}_{int(mavg_end)}_mavg']).shift(1)
-    df = get_returns_volatility(df, vol_range_list=vol_range_list, close_px_col=ticker)
 
     ## Ticker Trend Signal and Trade
     mavg_col_list = [f'{ticker}_{int(mavg)}_mavg' for mavg in np.linspace(mavg_start, mavg_end, mavg_stepsize).tolist()]
@@ -227,7 +225,7 @@ def calculate_keltner_channels(start_date, end_date, ticker, price_or_returns_ca
     if price_or_returns_calc == 'price':
         # Calculate the Exponential Moving Average (EMA)
         df[f'{ticker}_{rolling_atr_window}_ema_price'] = df['close'].ewm(span=rolling_atr_window,
-                                                                            adjust=False).mean()
+                                                                         adjust=False).mean()
 
         # Calculate the True Range (TR) and Average True Range (ATR)
         df[f'{ticker}_high-low'] = df['high'] - df['low']

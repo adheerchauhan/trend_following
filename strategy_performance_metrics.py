@@ -158,7 +158,7 @@ def calculate_annualized_std_dev(df, strategy_daily_return_col, strategy_trade_c
     return annualized_std_dev
 
 
-def calculate_sharpe_ratio(df, strategy_daily_return_col, strategy_trade_count_col, annual_trading_days=252, annual_rf=0.01,
+def calculate_sharpe_ratio(df, strategy_daily_return_col, strategy_trade_count_col, annual_trading_days=252, annual_rf=0.05,
                            include_transaction_costs_and_fees=True, transaction_cost_est=0.001, passive_trade_rate=0.5):
 
     daily_rf = (1 + annual_rf) ** (1/annual_trading_days) - 1
@@ -257,7 +257,7 @@ def calculate_risk_and_performance_metrics(df, strategy_daily_return_col, strate
 def rolling_sharpe_ratio(df, window, strategy_daily_return_col, strategy_trade_count_col, **kwargs):
     def sharpe_on_window(window_df):
         # Calculate the Sharpe ratio on the windowed data frame
-        if window_df[strategy_trade_count_col].sum() == 0 or window_df[strategy_daily_return_col].std() == 0:
+        if np.abs(window_df[strategy_trade_count_col]).sum() < 5 or window_df[strategy_daily_return_col].std() == 0:
             return 0  # Return 0 Sharpe ratio if there are no trades or no variation in returns
         else:
             return calculate_sharpe_ratio(window_df, strategy_daily_return_col, strategy_trade_count_col, **kwargs)
