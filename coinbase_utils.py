@@ -102,7 +102,14 @@ def save_historical_crypto_prices_from_coinbase(ticker, end_date, save_to_file=F
         'ETH-USD': '2016-05-01',
         'SOL-USD': '2021-06-01',
         'LTC-USD': '2021-08-01',
-        'DOGE-USD': '2021-05-01'
+        'DOGE-USD': '2021-05-01',
+        'CRO-USD': '2021-10-01',
+        'ADA-USD': '2021-03-01',
+        'AVAX-USD': '2021-09-01',
+        'XRP-USD': '2023-06-01',
+        'SHIB-USD': '2021-08-01',
+        'LINK-USD': '2019-06-01',
+        'UNI-USD': '2020-09-01',
     }
     start_date = start_date_dict.get(ticker)
     if not start_date:
@@ -120,7 +127,7 @@ def save_historical_crypto_prices_from_coinbase(ticker, end_date, save_to_file=F
             current_end_date = end_date
         start_timestamp = int(temp_start_date.timestamp())
         end_timestamp = int(current_end_date.timestamp())
-        print(temp_start_date, current_end_date, end_date)
+        # print(temp_start_date, current_end_date, end_date)
         crypto_price_list.append(
             get_coinbase_daily_historical_price_data(client, ticker, start_timestamp, end_timestamp))
         temp_start_date = pd.to_datetime(current_end_date) + datetime.timedelta(days=1)
