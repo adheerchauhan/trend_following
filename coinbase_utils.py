@@ -5,10 +5,39 @@ from json import dumps
 import pandas as pd
 import datetime
 import os
+from requests.exceptions import HTTPError
 
 
 key_location = f'{os.environ.get('HOME')}/Documents/git/trend_following/cdp_api_key.json'
-
+coinbase_start_date_by_ticker_dict = {
+    'BTC-USD': '2016-01-01',
+    'ETH-USD': '2016-05-01',
+    'SOL-USD': '2021-06-01',
+    'LTC-USD': '2016-08-01',
+    'DOGE-USD': '2021-05-01',
+    'CRO-USD': '2021-10-01',
+    'ADA-USD': '2021-03-01',
+    'AVAX-USD': '2021-09-01',
+    'XRP-USD': '2023-06-01',
+    'SHIB-USD': '2021-08-01',
+    'LINK-USD': '2019-06-01',
+    'UNI-USD': '2020-09-01',
+    'DOT-USD': '2021-06-01',
+    'FET-USD': '2021-07-01',
+    'ALGO-USD': '2019-08-01',
+    'DAI-USD': '2020-04-01',
+    'AAVE-USD': '2020-12-01',
+    'XLM-USD': '2019-02-01',
+    'MATIC-USD': '2021-02-01',
+    'ATOM-USD': '2020-01-01',
+    'MANA-USD': '2021-04-01',
+    'OXT-USD': '2019-12-01',
+    'KRL-USD': '2021-10-01',
+    'AMP-USD': '2021-05-01',
+    'REQ-USD': '2021-07-01',
+    'SKL-USD': '2021-02-01',
+    'GRT-USD': '2020-12-01'
+}
 
 def get_coinbase_rest_api_client(key_location):
     client = RESTClient(key_file=key_location)
@@ -48,6 +77,36 @@ def get_portfolio_breakdown(client):
         df_portfolio = pd.DataFrame(portfolio_data)
 
     return df_portfolio
+
+
+def determine_coinbase_start_date(ticker_list):
+    start_date_dict = {}
+    ticker_start_date = '2016-01-01'
+    dates = pd.date_range(start=ticker_start_date, periods=12 * 10, freq='MS')
+    end_date = datetime.datetime.now().date()
+    for ticker in ticker_list:
+        for date in dates:
+            try:
+                # Pass the current date as the end_date to the function
+                print(f"Checking data for {ticker}: {date}")
+                df = save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True,
+                                                                 start_date=date, end_date=end_date)
+                available_date = date  # Store the first available date
+                print(f"Data available from: {available_date}")
+                break  # Exit the loop when data is found
+            except KeyError:
+                pass  # Continue checking the next date if data is not available
+            except HTTPError:
+                print(f"HTTPError encountered for {ticker}. Skipping further checks.")
+                break  # Stop checking more dates for this ticker
+
+        if available_date:
+            print(f"First available date for {ticker}: {available_date}")
+            start_date_dict[ticker] = date.strftime('%Y-%m-%d')
+        else:
+            print("No data available within the date range.")
+
+    return start_date_dict
 
 
 def get_coinbase_daily_historical_price_data(client, ticker, start_timestamp, end_timestamp, retries=3, delay=5):
@@ -94,29 +153,19 @@ def get_coinbase_daily_historical_price_data(client, ticker, start_timestamp, en
     raise Exception("Max retries exceeded. Could not connect to Coinbase API.")
 
 
-def save_historical_crypto_prices_from_coinbase(ticker, end_date, save_to_file=False):
+def save_historical_crypto_prices_from_coinbase(ticker, user_start_date=False, start_date=None, end_date=None,
+                                                save_to_file=False):
 
     client = get_coinbase_rest_api_client(key_location)
-    start_date_dict = {
-        'BTC-USD': '2016-01-01',
-        'ETH-USD': '2016-05-01',
-        'SOL-USD': '2021-06-01',
-        'LTC-USD': '2021-08-01',
-        'DOGE-USD': '2021-05-01',
-        'CRO-USD': '2021-10-01',
-        'ADA-USD': '2021-03-01',
-        'AVAX-USD': '2021-09-01',
-        'XRP-USD': '2023-06-01',
-        'SHIB-USD': '2021-08-01',
-        'LINK-USD': '2019-06-01',
-        'UNI-USD': '2020-09-01',
-    }
-    start_date = start_date_dict.get(ticker)
-    if not start_date:
-        print(f"Start date for {ticker} is not included in the dictionary!")
-        return None
+    if user_start_date:
+        start_date = pd.Timestamp(start_date)
+    else:
+        start_date = coinbase_start_date_by_ticker_dict.get(ticker)
+        start_date = pd.Timestamp(start_date)
+        if not start_date:
+            print(f"Start date for {ticker} is not included in the dictionary!")
+            return None
 
-    start_date = pd.Timestamp(start_date)
     temp_start_date = start_date
     end_date = pd.Timestamp(end_date)
     current_end_date = temp_start_date
