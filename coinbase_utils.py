@@ -62,6 +62,7 @@ def get_portfolio_breakdown(client):
             'asset_uuid': position['asset_uuid'],
             'total_balance_fiat': position['total_balance_fiat'],
             'available_to_trade_fiat': position['available_to_trade_fiat'],
+            'total_balance_crypto': position['total_balance_crypto'],
             'allocation': position['allocation'],
             'cost_basis_value': position['cost_basis']['value'],
             'cost_basis_currency': position['cost_basis']['currency'],
