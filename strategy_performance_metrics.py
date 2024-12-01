@@ -183,7 +183,7 @@ def calculate_sharpe_ratio(df, strategy_daily_return_col, strategy_trade_count_c
 def calculate_risk_and_performance_metrics(df, strategy_daily_return_col, strategy_trade_count_col, annual_rf=0.05,
                                            annual_trading_days=252, include_transaction_costs_and_fees=True,
                                            transaction_cost_est=0.001,
-                                           passive_trade_rate=0.5):
+                                           passive_trade_rate=0.05):
     # Calculate CAGR
     annualized_return = calculate_CAGR(df, strategy_daily_return_col=strategy_daily_return_col,
                                        strategy_trade_count_col=strategy_trade_count_col,

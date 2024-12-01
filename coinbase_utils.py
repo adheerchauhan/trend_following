@@ -36,7 +36,12 @@ coinbase_start_date_by_ticker_dict = {
     'AMP-USD': '2021-05-01',
     'REQ-USD': '2021-07-01',
     'SKL-USD': '2021-02-01',
-    'GRT-USD': '2020-12-01'
+    'GRT-USD': '2020-12-01',
+    'MOBILE-USD': '2024-02-01',
+    'AIOZ-USD': '2022-02-01',
+    'ZRO-USD': '2024-06-01',
+    'HNT-USD': '2023-06-01',
+    'HONEY-USD': '2024-01-01'
 }
 
 def get_coinbase_rest_api_client(key_location):
