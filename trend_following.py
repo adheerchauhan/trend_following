@@ -216,7 +216,9 @@ def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, slope
 def calculate_keltner_channels(start_date, end_date, ticker, price_or_returns_calc='price', rolling_atr_window=20,
                                upper_atr_multiplier=2, lower_atr_multiplier=2, use_coinbase_data=True):
     if use_coinbase_data:
-        df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        # df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
+                                                            end_date=end_date, save_to_file=False)
         df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
     else:
         df = load_financial_data(start_date, end_date, ticker, print_status=False)  # .shift(1)
@@ -275,7 +277,9 @@ def calculate_keltner_channels(start_date, end_date, ticker, price_or_returns_ca
 def calculate_donchian_channels(start_date, end_date, ticker, price_or_returns_calc='price',
                                 rolling_donchian_window=20, use_coinbase_data=True):
     if use_coinbase_data:
-        df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        # df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
+                                                            end_date=end_date, save_to_file=False)
         df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
     else:
         df = load_financial_data(start_date, end_date, ticker, print_status=False)  # .shift(1)
@@ -323,7 +327,9 @@ def generate_rsi_signal(start_date, end_date, ticker, rolling_rsi_period=14, rsi
                         use_coinbase_data=True):
     # Get Close Prices
     if use_coinbase_data:
-        df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        # df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
+                                                            end_date=end_date, save_to_file=False)
         df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
         df = df[['close']].rename(columns={'close': f'{ticker}'})
     else:
@@ -387,7 +393,9 @@ def generate_volume_oscillator_signal(start_date, end_date, ticker, fast_mavg, s
                                       moving_avg_type='simple', use_coinbase_data=True):
 
     if use_coinbase_data:
-        df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        # df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
+                                                            end_date=end_date, save_to_file=False)
         df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
     else:
         df = load_financial_data(start_date, end_date, ticker, print_status=False)  # .shift(1)
@@ -420,7 +428,9 @@ def generate_volume_oscillator_signal(start_date, end_date, ticker, fast_mavg, s
 
 def calculate_on_balance_volume(start_date, end_date, ticker, use_coinbase_data=True):
     if use_coinbase_data:
-        df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        # df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
+                                                            end_date=end_date, save_to_file=False)
         df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
     else:
         df = load_financial_data(start_date, end_date, ticker, print_status=False)
