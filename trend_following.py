@@ -463,3 +463,98 @@ def calculate_on_balance_volume(start_date, end_date, ticker, use_coinbase_data=
 
     return df
 
+
+def generate_trend_signal_with_donchian_channel(start_date, end_date, ticker, fast_mavg, slow_mavg, mavg_stepsize,
+                                                moving_avg_type='exponential', price_or_returns_calc='price',
+                                                rolling_donchian_window=20, long_only=False, use_coinbase_data=True):
+    # Create Column Names
+    donchian_signal_col = f'{ticker}_{rolling_donchian_window}_donchian_signal'
+    trend_signal_col = f'{ticker}_trend_signal'
+    trend_donchian_signal_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_signal'
+    strategy_returns_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_returns'
+    strategy_trades_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_trades'
+
+    # Pull Close Prices from Coinbase
+    df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
+                                                        end_date=end_date, save_to_file=False)
+    df = (df[['close']].rename(columns={'close': ticker}))
+    df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
+
+    # Generate Trend Signal
+    df_trend = (create_trend_strategy(df, ticker, mavg_start=fast_mavg, mavg_end=slow_mavg, mavg_stepsize=mavg_stepsize,
+                                      slope_window=10, moving_avg_type=moving_avg_type,
+                                      price_or_returns_calc=price_or_returns_calc)
+    .rename(columns={
+        f'{ticker}_trend_strategy_returns': f'{ticker}_trend_strategy_returns_{fast_mavg}_{mavg_stepsize}_{slow_mavg}',
+        f'{ticker}_trend_strategy_trades': f'{ticker}_trend_strategy_trades_{fast_mavg}_{mavg_stepsize}_{slow_mavg}'}))
+
+    # Generate Donchian Channels
+    df_donchian = calculate_donchian_channels(start_date=start_date, end_date=end_date, ticker=ticker,
+                                              price_or_returns_calc=price_or_returns_calc,
+                                              rolling_donchian_window=rolling_donchian_window,
+                                              use_coinbase_data=use_coinbase_data)
+
+    # Donchian Buy signal: Price crosses above upper band
+    # Donchian Sell signal: Price crosses below lower band
+    df_donchian[donchian_signal_col] = np.where(
+        (df_donchian[f'close'] > df_donchian[f'{ticker}_{rolling_donchian_window}_donchian_upper_band_price']), 1,
+        np.where((df_donchian[f'close'] < df_donchian[f'{ticker}_{rolling_donchian_window}_donchian_lower_band_price']),
+                 -1, 0))
+
+    # Merging the Trend and Donchian Dataframes
+    donchian_cols = [f'{ticker}_{rolling_donchian_window}_donchian_upper_band_{price_or_returns_calc}',
+                     f'{ticker}_{rolling_donchian_window}_donchian_lower_band_{price_or_returns_calc}',
+                     f'{ticker}_{rolling_donchian_window}_donchian_middle_band_{price_or_returns_calc}',
+                     donchian_signal_col]
+    df_trend = pd.merge(df_trend, df_donchian[donchian_cols], left_index=True, right_index=True, how='left')
+
+    # Trend and Donchian Channel Signal
+    buy_signal = ((df_trend[donchian_signal_col] == 1) &
+                  (df_trend[trend_signal_col] == 1))
+    sell_signal = ((df_trend[donchian_signal_col] == -1) &
+                   (df_trend[trend_signal_col] == -1))
+
+    # Generate Long Only Signal
+    if long_only:
+        df_trend[trend_donchian_signal_col] = np.where(buy_signal, 1, 0)
+    # Generate Long & Short Signal
+    else:
+        df_trend[trend_donchian_signal_col] = np.where(buy_signal, 1, np.where(sell_signal, -1, 0))
+
+    df_trend[strategy_returns_col] = df_trend[trend_donchian_signal_col] * df_trend[f'{ticker}_pct_returns']
+    df_trend[strategy_trades_col] = df_trend[trend_donchian_signal_col].diff()
+
+    return df_trend
+
+
+def get_trend_donchian_signal_for_portfolio(start_date, end_date, ticker_list, fast_mavg, slow_mavg, mavg_stepsize,
+                                            rolling_donchian_window, long_only=False, price_or_returns_calc='price',
+                                            use_coinbase_data=True):
+
+    ## Generate trend signal for all tickers
+    trend_list = []
+    date_list = cn.coinbase_start_date_by_ticker_dict
+    for ticker in ticker_list:
+        close_price_col = f'{ticker}'
+        signal_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_signal'
+        returns_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_returns'
+        trades_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_trades'
+        if pd.to_datetime(date_list[ticker]).date() > start_date:
+            df_trend = generate_trend_signal_with_donchian_channel(
+                start_date=pd.to_datetime(date_list[ticker]).date(), end_date=end_date, ticker=ticker,
+                fast_mavg=fast_mavg, slow_mavg=slow_mavg, mavg_stepsize=mavg_stepsize,
+                rolling_donchian_window=rolling_donchian_window, price_or_returns_calc=price_or_returns_calc,
+                long_only=long_only, use_coinbase_data=use_coinbase_data)
+        else:
+            df_trend = generate_trend_signal_with_donchian_channel(
+                start_date=start_date, end_date=end_date, ticker=ticker, fast_mavg=fast_mavg, slow_mavg=slow_mavg,
+                mavg_stepsize=mavg_stepsize, rolling_donchian_window=rolling_donchian_window,
+                price_or_returns_calc=price_or_returns_calc, long_only=long_only, use_coinbase_data=use_coinbase_data)
+        trend_cols = [close_price_col, signal_col, returns_col, trades_col]
+        df_trend = df_trend[trend_cols]
+        trend_list.append(df_trend)
+
+    df_trend = pd.concat(trend_list, axis=1)
+
+    return df_trend
+
