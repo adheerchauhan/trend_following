@@ -74,10 +74,12 @@ def get_target_volatility_position_sizing(df, cov_matrix, date, ticker_list, dai
     return df
 
 
-def get_daily_positions(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_mavg, rolling_donchian_window,
-                        transaction_cost_est, passive_trade_rate):
+def get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_mavg, rolling_donchian_window,
+                                           transaction_cost_est, passive_trade_rate):
 
     previous_date = df.index[df.index.get_loc(date) - 1]
+
+    ## Estimated Transaction Costs and Fees
     est_fees = (transaction_cost_est + perf.estimate_fee_per_trade(passive_trade_rate))
 
     for ticker in ticker_list:
@@ -96,29 +98,37 @@ def get_daily_positions(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_ma
         df[actual_position_size_col].loc[date] = 0.0
         df[event_col].loc[date] = np.nan
 
-        ## TODO: Check if target notional exceeds available cash. If it does, the max target notional can only be the available cash minus a buffer
         ## Taking a New Long position
         if (df[signal_col].loc[date] == 1) and (df[signal_col].loc[previous_date] == 0) and (
                 df[actual_position_notional_col].loc[previous_date] == 0):
-            net_long_notional = df[target_position_notional_col].loc[date] * (1 - est_fees)
-            df[actual_position_notional_col].loc[date] = net_long_notional
-            df[actual_position_entry_price_col].loc[date] = df[t_1_close_price_col].loc[date]
-            df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
-                                                      df[actual_position_entry_price_col].loc[date])
-            df[event_col].loc[date] = 'New Long Position'
+            # Building a cash buffer
+            available_cash_buffer = df['available_cash'].loc[date] * (1 - 0.10)
+            target_long_notional = df[target_position_notional_col].loc[date]
+            if available_cash_buffer - target_long_notional > 0:
+                net_long_notional = target_long_notional * (1 - est_fees)
+                df[actual_position_notional_col].loc[date] = net_long_notional
+                df[actual_position_entry_price_col].loc[date] = df[t_1_close_price_col].loc[date]
+                df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
+                                                          df[actual_position_entry_price_col].loc[date])
+                df['available_cash'].loc[date] = df['available_cash'].loc[date] - target_long_notional
+                df[event_col].loc[date] = 'New Long Position'
 
         ## Taking a New Short position
         elif (df[signal_col].loc[date] == -1) and (df[signal_col].loc[previous_date] == 0) and (
                 df[actual_position_notional_col].loc[previous_date] == 0):
-            net_short_notional = -(df[target_position_notional_col].loc[date] * (1 - est_fees))
-            df[actual_position_notional_col].loc[date] = net_short_notional
-            df[actual_position_entry_price_col].loc[date] = df[t_1_close_price_col].loc[date]
-            df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
-                                                      df[actual_position_entry_price_col].loc[date])
-            df[short_sale_proceeds_col].loc[date] = -df[actual_position_notional_col].loc[date]
-            df[event_col].loc[date] = 'New Short Position'
+            # Building a cash buffer
+            available_cash_buffer = df['available_cash'].loc[date] * (1 - 0.10)
+            target_short_notional = df[target_position_notional_col].loc[date]
+            if available_cash_buffer - target_short_notional > 0:
+                net_short_notional = -(target_short_notional * (1 - est_fees))
+                df[actual_position_notional_col].loc[date] = net_short_notional
+                df[actual_position_entry_price_col].loc[date] = df[t_1_close_price_col].loc[date]
+                df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
+                                                          df[actual_position_entry_price_col].loc[date])
+                df[short_sale_proceeds_col].loc[date] = -net_short_notional
+                df[event_col].loc[date] = 'New Short Position'
 
-        ## Amending an Open Long Position
+        ## Open Long Position
         elif (df[signal_col].loc[date] == 1) and (df[signal_col].loc[previous_date] == 1) and (
                 df[actual_position_notional_col].loc[previous_date] > 0):
             df[actual_position_size_col].loc[date] = df[actual_position_size_col].loc[previous_date]
@@ -127,9 +137,9 @@ def get_daily_positions(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_ma
             df[actual_position_entry_price_col].loc[date] = df[actual_position_entry_price_col].loc[previous_date]
             df[event_col].loc[date] = 'Open Long Position'
 
-        ## Amending an Open Short Position
+        ## Open Short Position
         elif (df[signal_col].loc[date] == -1) and (df[signal_col].loc[previous_date] == -1) and (
-                df[actual_position_notional_col].loc[previous_date] < 0):
+            df[actual_position_notional_col].loc[previous_date] < 0):
             df[actual_position_size_col].loc[date] = df[actual_position_size_col].loc[previous_date]
             df[actual_position_notional_col].loc[date] = (df[actual_position_size_col].loc[date] *
                                                           df[t_1_close_price_col].loc[date])
@@ -140,24 +150,29 @@ def get_daily_positions(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_ma
         ## Taking a New Long Position with an Open Short Position
         elif (df[signal_col].loc[date] == 1) and (df[signal_col].loc[previous_date] == -1) and (
                 df[actual_position_notional_col].loc[previous_date] < 0):
-            net_long_notional = df[target_position_notional_col].loc[date] * (1 - est_fees)
-            df[actual_position_notional_col].loc[date] = net_long_notional
-            df[actual_position_entry_price_col].loc[date] = df[t_1_close_price_col].loc[date]
-            df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
-                                                      df[actual_position_entry_price_col].loc[date])
-            df[short_sale_proceeds_col].loc[date] = 0.0
-            df[event_col].loc[date] = 'New Long with Open Short Position'
+            target_long_notional = min(df[target_position_notional_col].loc[date], df['available_cash'].loc[date])
+            if target_long_notional > 0:
+                net_long_notional = target_long_notional * (1 - est_fees)
+                df[actual_position_notional_col].loc[date] = net_long_notional
+                df[actual_position_entry_price_col].loc[date] = df[t_1_close_price_col].loc[date]
+                df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
+                                                          df[actual_position_entry_price_col].loc[date])
+                df[short_sale_proceeds_col].loc[date] = 0.0
+                df['available_cash'].loc[date] = df['available_cash'].loc[date] - target_long_notional
+                df[event_col].loc[date] = 'New Long with Open Short Position'
 
         ## Taking a New Short Position with an Existing Long Position
         elif (df[signal_col].loc[date] == -1) and (df[signal_col].loc[previous_date] == 1) and (
                 df[actual_position_notional_col].loc[previous_date] > 0):
-            net_short_notional = -(df[target_position_notional_col].loc[date] * (1 - est_fees))
-            df[actual_position_notional_col].loc[date] = net_short_notional
-            df[actual_position_entry_price_col].loc[date] = df[t_1_close_price_col].loc[date]
-            df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
-                                                      df[actual_position_entry_price_col].loc[date])
-            df[short_sale_proceeds_col].loc[date] = -df[actual_position_notional_col].loc[date]
-            df[event_col].loc[date] = 'New Short with Open Long Position'
+            target_short_notional = min(df[target_position_notional_col].loc[date], df['available_cash'].loc[date])
+            if target_short_notional > 0:
+                net_short_notional = -(target_short_notional * (1 - est_fees))
+                df[actual_position_notional_col].loc[date] = net_short_notional
+                df[actual_position_entry_price_col].loc[date] = df[t_1_close_price_col].loc[date]
+                df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
+                                                          df[actual_position_entry_price_col].loc[date])
+                df[short_sale_proceeds_col].loc[date] = -net_short_notional
+                df[event_col].loc[date] = 'New Short with Open Long Position'
 
         ## Closing a Long Position
         elif (df[signal_col].loc[date] == 0) and (df[signal_col].loc[previous_date] == 1) and (
@@ -166,6 +181,10 @@ def get_daily_positions(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_ma
             df[actual_position_entry_price_col].loc[date] = 0
             df[actual_position_size_col].loc[date] = 0
             df[actual_position_exit_price_col].loc[date] = df[t_1_close_price_col].loc[date]
+            closing_long_market_value = (df[actual_position_size_col].loc[previous_date] *
+                                         df[actual_position_exit_price_col].loc[date])
+            net_closing_long_market_value = closing_long_market_value * (1 - est_fees)
+            df['available_cash'].loc[date] = (df['available_cash'].loc[date] + net_closing_long_market_value)
             df[event_col].loc[date] = 'Closing Long Position'
 
         ## Closing a Short Position
@@ -176,6 +195,12 @@ def get_daily_positions(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_ma
             df[actual_position_size_col].loc[date] = 0
             df[actual_position_exit_price_col].loc[date] = df[t_1_close_price_col].loc[date]
             df[short_sale_proceeds_col].loc[date] = 0.0
+            closing_short_market_value = (df[actual_position_size_col].loc[previous_date] *
+                                          df[actual_position_exit_price_col].loc[date])
+            net_closing_short_market_value = closing_short_market_value * (1 - est_fees)
+            short_sale_proceeds = df[short_sale_proceeds_col].loc[previous_date]
+            df['available_cash'].loc[date] = (df['available_cash'].loc[date] +
+                                              (net_closing_short_market_value + short_sale_proceeds))
             df[event_col].loc[date] = 'Closing Short Position'
 
         ## No Event
@@ -186,63 +211,9 @@ def get_daily_positions(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_ma
             df[short_sale_proceeds_col].loc[date] = 0
             df[event_col].loc[date] = 'No Event'
 
-    return df
-
-
-def calculate_portfolio_cash_and_market_value_per_day(df, date, ticker_list, transaction_cost_est, passive_trade_rate):
-    ## Create Previous Date Index
-    previous_date = df.index[df.index.get_loc(date) - 1]
-
-    ## Calculate the estimated transaction costs and exchange fees
-    est_fees = (transaction_cost_est + perf.estimate_fee_per_trade(passive_trade_rate))
-
-    event_cols = [f'{ticker}_event' for ticker in ticker_list]
+    ## Calculate End of Day Portfolio Positions
     actual_position_notional_cols = [f'{ticker}_actual_position_notional' for ticker in ticker_list]
-    target_position_notional_cols = [f'{ticker}_target_notional' for ticker in ticker_list]
-    actual_position_size_cols = [f'{ticker}_actual_size' for ticker in ticker_list]
-    exit_price_cols = [f'{ticker}_actual_position_exit_price' for ticker in ticker_list]
     short_sale_proceeds_cols = [f'{ticker}_short_sale_proceeds' for ticker in ticker_list]
-
-    ## New Long Positions
-    long_position_identifiers = ['New Long Position', 'New Long with Open Short Position']
-    new_long_mask = df[event_cols].loc[date].isin(long_position_identifiers)
-    new_long_market_value = df[actual_position_notional_cols].loc[date].where(new_long_mask.values).sum()
-    new_target_long_market_value = df[target_position_notional_cols].loc[date].where(new_long_mask.values).sum()
-    # net_long_market_value = new_long_market_value * (1 - est_fees)
-    ## We're subtracting target long market value from available cash because that what is paid prior to transaction costs
-    ## The actual market value of the position is the target long market value minus transaction costs
-    df['available_cash'].loc[date] = (df['available_cash'].loc[date] -
-                                      new_target_long_market_value)
-
-    ## New Short Positions
-    ## Cash is generated from a New Short position and is stored as Short Sale Proceeds
-    short_position_identifiers = ['New Short Position', 'New Short with Open Long Position']
-    new_short_mask = df[event_cols].loc[date].isin(short_position_identifiers)
-    new_short_market_value = -df[actual_position_notional_cols].loc[date].where(new_short_mask.values).sum()
-
-    ## Closed Long Positions
-    closing_long_mask = df[event_cols].loc[date] == 'Closing Long Position'
-    closing_long_masked_sizes = (df[actual_position_size_cols].loc[previous_date]
-                                 .where(closing_long_mask.values).fillna(0).values)
-    closing_long_masked_prices = (df[exit_price_cols].loc[date]
-                                  .where(closing_long_mask.values).fillna(0).values)
-    closing_long_market_value = (closing_long_masked_sizes * closing_long_masked_prices).sum()
-    net_closing_long_market_value = closing_long_market_value * (1 - est_fees)
-    df['available_cash'].loc[date] = (df['available_cash'].loc[date] +
-                                      net_closing_long_market_value)
-
-    ## Closed Short Positions
-    closing_short_mask = df[event_cols].loc[date] == 'Closing Short Position'
-    closing_short_masked_sizes = (df[actual_position_size_cols].loc[previous_date]
-                                  .where(closing_short_mask.values).fillna(0).values)
-    closing_short_masked_prices = df[exit_price_cols].loc[date].where(closing_short_mask.values).fillna(0).values
-    closing_short_market_value = (closing_short_masked_sizes * closing_short_masked_prices).sum()
-    net_closing_short_market_value = closing_short_market_value * (1 - est_fees)
-    short_sale_proceeds_value = df[short_sale_proceeds_cols].loc[previous_date].where(closing_short_mask.values).sum()
-    df['available_cash'].loc[date] = (df['available_cash'].loc[date] +
-                                      (short_sale_proceeds_value + net_closing_short_market_value))
-
-    ## Portfolio Positions
     df['count_of_positions'].loc[date] = df[actual_position_notional_cols].loc[date].ne(0).sum()
     df['total_actual_position_notional'].loc[date] = df[actual_position_notional_cols].loc[date].sum()
     df['total_portfolio_value'].loc[date] = (df['available_cash'].loc[date] +
@@ -252,11 +223,75 @@ def calculate_portfolio_cash_and_market_value_per_day(df, date, ticker_list, tra
     return df
 
 
+# def calculate_portfolio_cash_and_market_value_per_day(df, date, ticker_list, transaction_cost_est, passive_trade_rate):
+#     ## Create Previous Date Index
+#     previous_date = df.index[df.index.get_loc(date) - 1]
+#
+#     ## Calculate the estimated transaction costs and exchange fees
+#     est_fees = (transaction_cost_est + perf.estimate_fee_per_trade(passive_trade_rate))
+#
+#     event_cols = [f'{ticker}_event' for ticker in ticker_list]
+#     actual_position_notional_cols = [f'{ticker}_actual_position_notional' for ticker in ticker_list]
+#     target_position_notional_cols = [f'{ticker}_target_notional' for ticker in ticker_list]
+#     actual_position_size_cols = [f'{ticker}_actual_size' for ticker in ticker_list]
+#     exit_price_cols = [f'{ticker}_actual_position_exit_price' for ticker in ticker_list]
+#     short_sale_proceeds_cols = [f'{ticker}_short_sale_proceeds' for ticker in ticker_list]
+#
+#     ## New Long Positions
+#     long_position_identifiers = ['New Long Position', 'New Long with Open Short Position']
+#     new_long_mask = df[event_cols].loc[date].isin(long_position_identifiers)
+#     new_long_market_value = df[actual_position_notional_cols].loc[date].where(new_long_mask.values).sum()
+#     new_target_long_market_value = df[target_position_notional_cols].loc[date].where(new_long_mask.values).sum()
+#     # net_long_market_value = new_long_market_value * (1 - est_fees)
+#     ## We're subtracting target long market value from available cash because that what is paid prior to transaction costs
+#     ## The actual market value of the position is the target long market value minus transaction costs
+#     df['available_cash'].loc[date] = (df['available_cash'].loc[date] -
+#                                       new_target_long_market_value)
+#
+#     ## New Short Positions
+#     ## Cash is generated from a New Short position and is stored as Short Sale Proceeds
+#     short_position_identifiers = ['New Short Position', 'New Short with Open Long Position']
+#     new_short_mask = df[event_cols].loc[date].isin(short_position_identifiers)
+#     new_short_market_value = -df[actual_position_notional_cols].loc[date].where(new_short_mask.values).sum()
+#
+#     ## Closed Long Positions
+#     closing_long_mask = df[event_cols].loc[date] == 'Closing Long Position'
+#     closing_long_masked_sizes = (df[actual_position_size_cols].loc[previous_date]
+#                                  .where(closing_long_mask.values).fillna(0).values)
+#     closing_long_masked_prices = (df[exit_price_cols].loc[date]
+#                                   .where(closing_long_mask.values).fillna(0).values)
+#     closing_long_market_value = (closing_long_masked_sizes * closing_long_masked_prices).sum()
+#     net_closing_long_market_value = closing_long_market_value * (1 - est_fees)
+#     df['available_cash'].loc[date] = (df['available_cash'].loc[date] +
+#                                       net_closing_long_market_value)
+#
+#     ## Closed Short Positions
+#     closing_short_mask = df[event_cols].loc[date] == 'Closing Short Position'
+#     closing_short_masked_sizes = (df[actual_position_size_cols].loc[previous_date]
+#                                   .where(closing_short_mask.values).fillna(0).values)
+#     closing_short_masked_prices = df[exit_price_cols].loc[date].where(closing_short_mask.values).fillna(0).values
+#     closing_short_market_value = (closing_short_masked_sizes * closing_short_masked_prices).sum()
+#     net_closing_short_market_value = closing_short_market_value * (1 - est_fees)
+#     short_sale_proceeds_value = df[short_sale_proceeds_cols].loc[previous_date].where(closing_short_mask.values).sum()
+#     df['available_cash'].loc[date] = (df['available_cash'].loc[date] +
+#                                       (short_sale_proceeds_value + net_closing_short_market_value))
+#
+#     ## Portfolio Positions
+#     df['count_of_positions'].loc[date] = df[actual_position_notional_cols].loc[date].ne(0).sum()
+#     df['total_actual_position_notional'].loc[date] = df[actual_position_notional_cols].loc[date].sum()
+#     df['total_portfolio_value'].loc[date] = (df['available_cash'].loc[date] +
+#                                              df[short_sale_proceeds_cols].loc[date].sum() +
+#                                              df['total_actual_position_notional'].loc[date])
+#
+#     return df
+
+
 def get_target_volatility_daily_portfolio_positions(df, ticker_list, fast_mavg, slow_mavg, mavg_stepsize,
                                                     rolling_donchian_window, initial_capital, rolling_cov_window,
                                                     cash_buffer_percentage, annualized_target_volatility,
                                                     transaction_cost_est=0.001, passive_trade_rate=0.05,
-                                                    annual_trading_days=365):
+                                                    annual_trading_days=365, use_specific_start_date=False,
+                                                    signal_start_date=None):
 
     ## Calculate the covariance matrix for tickers in the portfolio
     returns_cols = [f'{ticker}_pct_returns' for ticker in ticker_list]
@@ -296,11 +331,15 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, fast_mavg, 
     df['target_notional_scaling_factor'] = 1.0
 
     ## Cash and the Total Portfolio Value on Day 1 is the initial capital for the strategy
-    df['available_cash'][0] = initial_capital
-    df['total_portfolio_value'][0] = initial_capital
+    if use_specific_start_date:
+        start_index_position = df.index.get_loc(signal_start_date)
+    else:
+        start_index_position = 0
+    df['available_cash'][start_index_position] = initial_capital
+    df['total_portfolio_value'][start_index_position] = initial_capital
 
     ## Identify Daily Positions starting from day 2
-    for date in df.index[1:]:
+    for date in df.index[start_index_position + 1:]:
         previous_date = df.index[df.index.get_loc(date) - 1]
 
         ## Start the day with the available cash from yesterday
@@ -314,12 +353,12 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, fast_mavg, 
                                                    total_portfolio_value_upper_limit)
 
         ## Get the daily positions
-        df = get_daily_positions(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_mavg, rolling_donchian_window,
-                                 transaction_cost_est, passive_trade_rate)
+        df = get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_mavg,
+                                                    rolling_donchian_window, transaction_cost_est, passive_trade_rate)
 
         ## Calculate Portfolio Value and Available Cash
-        df = calculate_portfolio_cash_and_market_value_per_day(df, date, ticker_list, transaction_cost_est,
-                                                               passive_trade_rate)
+        # df = calculate_portfolio_cash_and_market_value_per_day(df, date, ticker_list, transaction_cost_est,
+        #                                                        passive_trade_rate)
 
     return df
 
@@ -372,11 +411,12 @@ def calculate_portfolio_returns(df, ticker_list, fast_mavg, slow_mavg, mavg_step
                                 rolling_sharpe_window):
     ## Calculate Portfolio Returns
     df['portfolio_daily_pct_returns'] = df['total_portfolio_value'].pct_change()
+    df['portfolio_daily_pct_returns'].replace([np.inf, -np.inf], 0, inplace=True)
+    df['portfolio_daily_pct_returns'] = df['portfolio_daily_pct_returns'].fillna(0)
     trade_cols = [
         f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_trades'
         for ticker in ticker_list]
     df['portfolio_trade_count'] = np.abs(df[trade_cols]).sum(axis=1)
-    df['portfolio_daily_pct_returns'] = df['portfolio_daily_pct_returns'].fillna(0)
     df['portfolio_strategy_cumulative_return'] = (1 + df['portfolio_daily_pct_returns']).cumprod() - 1
 
     ## Calculate Rolling Sharpe Ratio
@@ -397,7 +437,8 @@ def apply_target_volatility_position_sizing_strategy(start_date, end_date, ticke
                                                      transaction_cost_est=0.001, passive_trade_rate=0.05,
                                                      use_coinbase_data=True, rolling_sharpe_window=50,
                                                      cash_buffer_percentage=0.10, annualized_target_volatility=0.20,
-                                                     annual_trading_days=365):
+                                                     annual_trading_days=365, use_specific_start_date=False,
+                                                     signal_start_date=None):
     ## Generate Trend Signal for all tickers
     df_trend = tf.get_trend_donchian_signal_for_portfolio(start_date=start_date, end_date=end_date,
                                                           ticker_list=ticker_list, fast_mavg=fast_mavg,
@@ -414,7 +455,8 @@ def apply_target_volatility_position_sizing_strategy(start_date, end_date, ticke
     df = get_target_volatility_daily_portfolio_positions(df_signal, ticker_list, fast_mavg, slow_mavg, mavg_stepsize,
                                                          rolling_donchian_window, initial_capital, rolling_cov_window,
                                                          cash_buffer_percentage, annualized_target_volatility,
-                                                         transaction_cost_est, passive_trade_rate, annual_trading_days)
+                                                         transaction_cost_est, passive_trade_rate, annual_trading_days,
+                                                         use_specific_start_date, signal_start_date)
 
     ## Calculate Portfolio Performance
     df = calculate_portfolio_returns(df, ticker_list, fast_mavg, slow_mavg, mavg_stepsize, rolling_donchian_window,
@@ -533,7 +575,8 @@ def calculate_atr_target_notional(df, date, ticker_list, rolling_atr_window, ris
 def get_atr_daily_portfolio_positions(df, ticker_list, fast_mavg, slow_mavg, mavg_stepsize,
                                       rolling_donchian_window, rolling_atr_window, risk_per_trade, stop_loss_multiple,
                                       initial_capital, cash_buffer_percentage, transaction_cost_est=0.001,
-                                      passive_trade_rate=0.05, annual_trading_days=365):
+                                      passive_trade_rate=0.05, annual_trading_days=365, use_specific_start_date=False,
+                                      signal_start_date=None):
 
     ## Reorder dataframe columns
     col_list = []
@@ -561,11 +604,15 @@ def get_atr_daily_portfolio_positions(df, ticker_list, fast_mavg, slow_mavg, mav
     df['target_notional_scaling_factor'] = 1.0
 
     ## Cash and the Total Portfolio Value on Day 1 is the initial capital for the strategy
-    df['available_cash'][0] = initial_capital
-    df['total_portfolio_value'][0] = initial_capital
+    if use_specific_start_date:
+        start_index_position = df.index.get_loc(signal_start_date)
+    else:
+        start_index_position = 0
+    df['available_cash'][start_index_position] = initial_capital
+    df['total_portfolio_value'][start_index_position] = initial_capital
 
     ## Identify Daily Positions starting from day 2
-    for date in df.index[1:]:
+    for date in df.index[start_index_position + 1:]:
         previous_date = df.index[df.index.get_loc(date) - 1]
 
         ## Start the day with the available cash from yesterday
@@ -579,12 +626,12 @@ def get_atr_daily_portfolio_positions(df, ticker_list, fast_mavg, slow_mavg, mav
                                            stop_loss_multiple)
 
         ## Get the daily positions
-        df = get_daily_positions(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_mavg, rolling_donchian_window,
-                                 transaction_cost_est, passive_trade_rate)
+        df = get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_mavg,
+                                                    rolling_donchian_window, transaction_cost_est, passive_trade_rate)
 
         ## Calculate Portfolio Value and Available Cash
-        df = calculate_portfolio_cash_and_market_value_per_day(df, date, ticker_list, transaction_cost_est,
-                                                               passive_trade_rate)
+        # df = calculate_portfolio_cash_and_market_value_per_day(df, date, ticker_list, transaction_cost_est,
+        #                                                        passive_trade_rate)
 
     return df
 
@@ -595,6 +642,7 @@ def apply_atr_position_sizing_strategy(start_date, end_date, ticker_list, fast_m
                                        risk_per_trade=0.02, stop_loss_multiple=1, initial_capital=15000,
                                        transaction_cost_est=0.001, passive_trade_rate=0.05, use_coinbase_data=True,
                                        rolling_sharpe_window=50, cash_buffer_percentage=0.10, annual_trading_days=365,
+                                       use_specific_start_date=False, signal_start_date=None,
                                        price_or_returns_calc='price'):
     ## Generate Trend Signal for all tickers
     df_trend = tf.get_trend_donchian_signal_for_portfolio(start_date=start_date, end_date=end_date,
@@ -616,7 +664,8 @@ def apply_atr_position_sizing_strategy(start_date, end_date, ticker_list, fast_m
     df = get_atr_daily_portfolio_positions(df, ticker_list, fast_mavg, slow_mavg, mavg_stepsize,
                                            rolling_donchian_window, rolling_atr_window, risk_per_trade,
                                            stop_loss_multiple, initial_capital, cash_buffer_percentage,
-                                           transaction_cost_est, passive_trade_rate, annual_trading_days)
+                                           transaction_cost_est, passive_trade_rate, annual_trading_days,
+                                           use_specific_start_date, signal_start_date)
 
     ## Calculate Portfolio Performance
     df = calculate_portfolio_returns(df, ticker_list, fast_mavg, slow_mavg, mavg_stepsize, rolling_donchian_window,
@@ -702,7 +751,7 @@ def calculate_std_target_notional(df, date, ticker_list, rolling_std_window, ris
 def get_std_daily_portfolio_positions(df, ticker_list, fast_mavg, slow_mavg, mavg_stepsize, rolling_donchian_window,
                                       rolling_std_window, risk_per_trade, stop_loss_multiple, initial_capital,
                                       cash_buffer_percentage, transaction_cost_est=0.001, passive_trade_rate=0.05,
-                                      annual_trading_days=365):
+                                      annual_trading_days=365, use_specific_start_date=False, signal_start_date=None):
 
     ## Reorder dataframe columns
     col_list = []
@@ -730,11 +779,15 @@ def get_std_daily_portfolio_positions(df, ticker_list, fast_mavg, slow_mavg, mav
     df['target_notional_scaling_factor'] = 1.0
 
     ## Cash and the Total Portfolio Value on Day 1 is the initial capital for the strategy
-    df['available_cash'][0] = initial_capital
-    df['total_portfolio_value'][0] = initial_capital
+    if use_specific_start_date:
+        start_index_position = df.index.get_loc(signal_start_date)
+    else:
+        start_index_position = 0
+    df['available_cash'][start_index_position] = initial_capital
+    df['total_portfolio_value'][start_index_position] = initial_capital
 
     ## Identify Daily Positions starting from day 2
-    for date in df.index[1:]:
+    for date in df.index[start_index_position + 1:]:
         previous_date = df.index[df.index.get_loc(date) - 1]
 
         ## Start the day with the available cash from yesterday
@@ -748,12 +801,12 @@ def get_std_daily_portfolio_positions(df, ticker_list, fast_mavg, slow_mavg, mav
                                            stop_loss_multiple)
 
         ## Get the daily positions
-        df = get_daily_positions(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_mavg, rolling_donchian_window,
-                                 transaction_cost_est, passive_trade_rate)
+        df = get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mavg_stepsize, slow_mavg,
+                                                    rolling_donchian_window, transaction_cost_est, passive_trade_rate)
 
         ## Calculate Portfolio Value and Available Cash
-        df = calculate_portfolio_cash_and_market_value_per_day(df, date, ticker_list, transaction_cost_est,
-                                                               passive_trade_rate)
+        # df = calculate_portfolio_cash_and_market_value_per_day(df, date, ticker_list, transaction_cost_est,
+        #                                                        passive_trade_rate)
 
     return df
 
@@ -763,6 +816,7 @@ def apply_std_position_sizing_strategy(start_date, end_date, ticker_list, fast_m
                                        risk_per_trade=0.02, stop_loss_multiple=1, initial_capital=15000,
                                        transaction_cost_est=0.001, passive_trade_rate=0.05, use_coinbase_data=True,
                                        rolling_sharpe_window=50, cash_buffer_percentage=0.10, annual_trading_days=365,
+                                       use_specific_start_date=False, signal_start_date=None,
                                        price_or_returns_calc='price'):
     ## Generate Trend Signal for all tickers
     df_trend = tf.get_trend_donchian_signal_for_portfolio(start_date=start_date, end_date=end_date,
@@ -784,7 +838,8 @@ def apply_std_position_sizing_strategy(start_date, end_date, ticker_list, fast_m
     df = get_std_daily_portfolio_positions(df, ticker_list, fast_mavg, slow_mavg, mavg_stepsize,
                                            rolling_donchian_window, rolling_std_window, risk_per_trade,
                                            stop_loss_multiple, initial_capital, cash_buffer_percentage,
-                                           transaction_cost_est, passive_trade_rate, annual_trading_days)
+                                           transaction_cost_est, passive_trade_rate, annual_trading_days,
+                                           use_specific_start_date, signal_start_date)
 
     ## Calculate Portfolio Performance
     df = calculate_portfolio_returns(df, ticker_list, fast_mavg, slow_mavg, mavg_stepsize, rolling_donchian_window,
