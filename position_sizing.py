@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
-import strategy_performance_metrics as perf
-import trend_following as tf
+import strategy_performance as perf
+import trend_following_signal as tf
 import coinbase_utils as cn
 
 
@@ -345,7 +345,7 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, fast_mavg, 
         ## Start the day with the available cash from yesterday
         df['available_cash'].loc[date] = df['available_cash'].loc[previous_date]
         total_portfolio_value_upper_limit = (df['total_portfolio_value'].loc[previous_date] *
-                                              (1 - cash_buffer_percentage))
+                                             (1 - cash_buffer_percentage))
         df['total_portfolio_value_upper_limit'].loc[date] = total_portfolio_value_upper_limit
 
         ## Calculate the target notional by ticker
