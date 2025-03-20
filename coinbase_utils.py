@@ -11,11 +11,11 @@ from requests.exceptions import HTTPError
 key_location = f'{os.environ.get('HOME')}/Documents/git/trend_following/cdp_api_key.json'
 coinbase_start_date_by_ticker_dict = {
     'BTC-USD': '2016-01-01',
-    'ETH-USD': '2016-05-01',
+    'ETH-USD': '2016-06-01',
     'SOL-USD': '2021-06-01',
-    'LTC-USD': '2016-08-01',
-    'DOGE-USD': '2021-05-01',
-    'CRO-USD': '2021-10-01',
+    'LTC-USD': '2016-09-01',
+    'DOGE-USD': '2021-06-01',
+    'CRO-USD': '2021-11-01',
     'ADA-USD': '2021-03-01',
     'AVAX-USD': '2021-09-01',
     'XRP-USD': '2023-06-01',
