@@ -175,17 +175,17 @@ def slope_signal(row):
 def create_trend_strategy(df, ticker, mavg_start, mavg_end, mavg_stepsize, slope_window, moving_avg_type='simple',
                           price_or_returns_calc='price'):
 
-    df[f'{ticker}_pct_returns'] = df[ticker].pct_change()
+    df[f'{ticker}_pct_returns'] = df[f'{ticker}_close'].pct_change()
 
     for window in np.linspace(mavg_start, mavg_end, mavg_stepsize):
         if moving_avg_type == 'simple':
             if price_or_returns_calc == 'price':
-                df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}'].rolling(int(window)).mean()
+                df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}_close'].rolling(int(window)).mean()
             elif price_or_returns_calc == 'returns':
                 df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}_pct_returns'].rolling(int(window)).mean()
         elif moving_avg_type == 'exponential':
             if price_or_returns_calc == 'price':
-                df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}'].ewm(span=window).mean()
+                df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}_close'].ewm(span=window).mean()
             elif price_or_returns_calc == 'returns':
                 df[f'{ticker}_{int(window)}_mavg'] = df[f'{ticker}_pct_returns'].ewm(span=window).mean()
         df[f'{ticker}_{int(window)}_mavg_slope'] = calculate_slope(df, column=f'{ticker}_{int(window)}_mavg',
@@ -264,12 +264,12 @@ def calculate_keltner_channels(start_date, end_date, ticker, price_or_returns_ca
                 lower_atr_multiplier * df[f'{ticker}_{rolling_atr_window}_avg_true_range_{price_or_returns_calc}'])
 
     # Shift only the Keltner channel metrics to avoid look-ahead bias
-    df[[f'{ticker}_{rolling_atr_window}_atr_middle_band_{price_or_returns_calc}',
-        f'{ticker}_{rolling_atr_window}_atr_upper_band_{price_or_returns_calc}',
-        f'{ticker}_{rolling_atr_window}_atr_lower_band_{price_or_returns_calc}']] = df[[
+    shift_columns = [
         f'{ticker}_{rolling_atr_window}_atr_middle_band_{price_or_returns_calc}',
         f'{ticker}_{rolling_atr_window}_atr_upper_band_{price_or_returns_calc}',
-        f'{ticker}_{rolling_atr_window}_atr_lower_band_{price_or_returns_calc}']].shift(1)
+        f'{ticker}_{rolling_atr_window}_atr_lower_band_{price_or_returns_calc}'
+    ]
+    df[shift_columns] = df[shift_columns].shift(1)
 
     return df
 
@@ -312,12 +312,12 @@ def calculate_donchian_channels(start_date, end_date, ticker, price_or_returns_c
              df[f'{ticker}_{rolling_donchian_window}_donchian_lower_band_{price_or_returns_calc}']) / 2)
 
     # Shift only the Keltner channel metrics to avoid look-ahead bias
-    df[[f'{ticker}_{rolling_donchian_window}_donchian_middle_band_{price_or_returns_calc}',
-        f'{ticker}_{rolling_donchian_window}_donchian_upper_band_{price_or_returns_calc}',
-        f'{ticker}_{rolling_donchian_window}_donchian_lower_band_{price_or_returns_calc}']] = df[[
+    shift_columns = [
         f'{ticker}_{rolling_donchian_window}_donchian_middle_band_{price_or_returns_calc}',
         f'{ticker}_{rolling_donchian_window}_donchian_upper_band_{price_or_returns_calc}',
-        f'{ticker}_{rolling_donchian_window}_donchian_lower_band_{price_or_returns_calc}']].shift(1)
+        f'{ticker}_{rolling_donchian_window}_donchian_lower_band_{price_or_returns_calc}'
+    ]
+    df[shift_columns] = df[shift_columns].shift(1)
 
     return df
 
@@ -477,7 +477,7 @@ def generate_trend_signal_with_donchian_channel(start_date, end_date, ticker, fa
     # Pull Close Prices from Coinbase
     df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
                                                         end_date=end_date, save_to_file=False)
-    df = (df[['close']].rename(columns={'close': ticker}))
+    df = (df[['close','open']].rename(columns={'close': f'{ticker}_close', 'open': f'{ticker}_open'}))
     df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
 
     # Generate Trend Signal
@@ -535,7 +535,7 @@ def get_trend_donchian_signal_for_portfolio(start_date, end_date, ticker_list, f
     trend_list = []
     date_list = cn.coinbase_start_date_by_ticker_dict
     for ticker in ticker_list:
-        close_price_col = f'{ticker}'
+        close_price_col = f'{ticker}_close'
         signal_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_signal'
         returns_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_returns'
         trades_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_trades'
