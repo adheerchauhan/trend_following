@@ -536,6 +536,7 @@ def get_trend_donchian_signal_for_portfolio(start_date, end_date, ticker_list, f
     date_list = cn.coinbase_start_date_by_ticker_dict
     for ticker in ticker_list:
         close_price_col = f'{ticker}_close'
+        open_price_col = f'{ticker}_open'
         signal_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_signal'
         returns_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_returns'
         trades_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_trades'
@@ -550,7 +551,7 @@ def get_trend_donchian_signal_for_portfolio(start_date, end_date, ticker_list, f
                 start_date=start_date, end_date=end_date, ticker=ticker, fast_mavg=fast_mavg, slow_mavg=slow_mavg,
                 mavg_stepsize=mavg_stepsize, rolling_donchian_window=rolling_donchian_window,
                 price_or_returns_calc=price_or_returns_calc, long_only=long_only, use_coinbase_data=use_coinbase_data)
-        trend_cols = [close_price_col, signal_col, returns_col, trades_col]
+        trend_cols = [close_price_col, open_price_col, signal_col, returns_col, trades_col]
         df_trend = df_trend[trend_cols]
         trend_list.append(df_trend)
 
