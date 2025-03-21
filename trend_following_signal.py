@@ -142,7 +142,7 @@ def momentum(df, period):
     return df.sub(df.shift(period), fill_value=0)
 
 
-def get_returns_volatility(df, vol_range_list=[10], close_px_col='BTC-USD'):
+def get_returns_volatility(df, vol_range_list=[10], close_px_col='BTC-USD_close'):
     df[f'{close_px_col}_pct_returns'] = df[close_px_col].pct_change()
     for vol_range in vol_range_list:
         df[f'{close_px_col}_volatility_{vol_range}'] = df[f'{close_px_col}_pct_returns'].rolling(vol_range).std()

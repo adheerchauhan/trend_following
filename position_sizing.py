@@ -294,7 +294,7 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, fast_mavg, 
                                                     signal_start_date=None):
 
     ## Calculate the covariance matrix for tickers in the portfolio
-    returns_cols = [f'{ticker}_pct_returns' for ticker in ticker_list]
+    returns_cols = [f'{ticker}_t_1_close_pct_returns' for ticker in ticker_list]
     cov_matrix = df[returns_cols].rolling(rolling_cov_window).cov(pairwise=True).dropna()
 
     ## Delete rows prior to the first available date of the covariance matrix
@@ -376,14 +376,15 @@ def get_volatility_adjusted_trend_signal(df, ticker_list, volatility_window, fas
         vol_adj_trend_signal_col = f'{ticker}_vol_adjusted_trend_signal'
 
         ## Calculate Position Volatility Adjusted Trend Signal
-        df = tf.get_returns_volatility(df, vol_range_list=[volatility_window], close_px_col=f'{ticker}')
-        df[annualized_volatility_col] = (df[f'{ticker}_volatility_{volatility_window}'] *
+        df[f'{ticker}_t_1_close'] = df[f'{ticker}_close'].shift(1)
+        df = tf.get_returns_volatility(df, vol_range_list=[volatility_window], close_px_col=f'{ticker}_t_1_close')
+        df[annualized_volatility_col] = (df[f'{ticker}_t_1_close_volatility_{volatility_window}'] *
                                          np.sqrt(annual_trading_days))
         df[vol_adj_trend_signal_col] = (df[trend_signal_col] / df[annualized_volatility_col])
         df[vol_adj_trend_signal_col] = df[vol_adj_trend_signal_col].fillna(0)
-        df[f'{ticker}_t_1_close'] = df[f'{ticker}'].shift(1)
-        trend_cols = [f'{ticker}', f'{ticker}_t_1_close', f'{ticker}_pct_returns', trend_signal_col, trend_returns_col,
-                      trend_trades_col, annualized_volatility_col, vol_adj_trend_signal_col]
+        trend_cols = [f'{ticker}_close', f'{ticker}_open', f'{ticker}_t_1_close', f'{ticker}_t_1_close_pct_returns',
+                      trend_signal_col, trend_returns_col, trend_trades_col, annualized_volatility_col,
+                      vol_adj_trend_signal_col]
         final_cols.append(trend_cols)
         ticker_signal_dict[ticker] = df[trend_cols]
     df_signal = pd.concat(ticker_signal_dict, axis=1)
