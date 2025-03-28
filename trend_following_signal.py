@@ -496,16 +496,22 @@ def generate_trend_signal_with_donchian_channel(start_date, end_date, ticker, fa
 
     # Donchian Buy signal: Price crosses above upper band
     # Donchian Sell signal: Price crosses below lower band
+    df_donchian[f't_1_close'] = df_donchian[f'close'].shift(1)
+    t_1_close_col = f't_1_close'
+    donchian_upper_band_col = f'{ticker}_{rolling_donchian_window}_donchian_upper_band_{price_or_returns_calc}'
+    donchian_lower_band_col = f'{ticker}_{rolling_donchian_window}_donchian_lower_band_{price_or_returns_calc}'
+    donchian_middle_band_col = f'{ticker}_{rolling_donchian_window}_donchian_middle_band_{price_or_returns_calc}'
+    df_donchian[f'{donchian_upper_band_col}_t_2'] = df_donchian[donchian_upper_band_col].shift(1)
+    df_donchian[f'{donchian_lower_band_col}_t_2'] = df_donchian[donchian_lower_band_col].shift(1)
+    df_donchian[f'{donchian_middle_band_col}_t_2'] = df_donchian[donchian_middle_band_col].shift(1)
     df_donchian[donchian_signal_col] = np.where(
-        (df_donchian[f'close'] > df_donchian[f'{ticker}_{rolling_donchian_window}_donchian_upper_band_price']), 1,
-        np.where((df_donchian[f'close'] < df_donchian[f'{ticker}_{rolling_donchian_window}_donchian_lower_band_price']),
+        (df_donchian[t_1_close_col] > df_donchian[f'{donchian_upper_band_col}_t_2']), 1,
+        np.where((df_donchian[t_1_close_col] < df_donchian[f'{donchian_lower_band_col}_t_2']),
                  -1, 0))
 
     # Merging the Trend and Donchian Dataframes
-    donchian_cols = [f'{ticker}_{rolling_donchian_window}_donchian_upper_band_{price_or_returns_calc}',
-                     f'{ticker}_{rolling_donchian_window}_donchian_lower_band_{price_or_returns_calc}',
-                     f'{ticker}_{rolling_donchian_window}_donchian_middle_band_{price_or_returns_calc}',
-                     donchian_signal_col]
+    donchian_cols = [f'{donchian_upper_band_col}_t_2', f'{donchian_lower_band_col}_t_2',
+                     f'{donchian_middle_band_col}_t_2', donchian_signal_col]
     df_trend = pd.merge(df_trend, df_donchian[donchian_cols], left_index=True, right_index=True, how='left')
 
     # Trend and Donchian Channel Signal
@@ -538,8 +544,10 @@ def get_trend_donchian_signal_for_portfolio(start_date, end_date, ticker_list, f
         close_price_col = f'{ticker}_close'
         open_price_col = f'{ticker}_open'
         signal_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_signal'
-        returns_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_returns'
-        trades_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_trades'
+        # returns_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_returns'
+        # trades_col = f'{ticker}_{fast_mavg}_{mavg_stepsize}_{slow_mavg}_mavg_crossover_{rolling_donchian_window}_donchian_strategy_trades'
+        lower_donchian_col = f'{ticker}_{rolling_donchian_window}_donchian_upper_band_{price_or_returns_calc}_t_2'
+        upper_donchian_col = f'{ticker}_{rolling_donchian_window}_donchian_lower_band_{price_or_returns_calc}_t_2'
         if pd.to_datetime(date_list[ticker]).date() > start_date:
             df_trend = generate_trend_signal_with_donchian_channel(
                 start_date=pd.to_datetime(date_list[ticker]).date(), end_date=end_date, ticker=ticker,
@@ -551,7 +559,7 @@ def get_trend_donchian_signal_for_portfolio(start_date, end_date, ticker_list, f
                 start_date=start_date, end_date=end_date, ticker=ticker, fast_mavg=fast_mavg, slow_mavg=slow_mavg,
                 mavg_stepsize=mavg_stepsize, rolling_donchian_window=rolling_donchian_window,
                 price_or_returns_calc=price_or_returns_calc, long_only=long_only, use_coinbase_data=use_coinbase_data)
-        trend_cols = [close_price_col, open_price_col, signal_col, returns_col, trades_col]
+        trend_cols = [close_price_col, open_price_col, signal_col, lower_donchian_col, upper_donchian_col]#returns_col, trades_col]
         df_trend = df_trend[trend_cols]
         trend_list.append(df_trend)
 
