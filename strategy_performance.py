@@ -148,6 +148,9 @@ def calculate_t_stat(df, strategy_daily_return_col, strategy_trade_count_col, in
 def calculate_annualized_std_dev(df, strategy_daily_return_col, strategy_trade_count_col, annual_trading_days,
                                  include_transaction_costs_and_fees=True, transaction_cost_est=0.001,
                                  passive_trade_rate=0.5):
+    # Filter on days with active exposure
+    df = df[df[strategy_trade_count_col] != 0]
+
     if include_transaction_costs_and_fees:
         average_fee_per_trade = estimate_fee_per_trade(passive_trade_rate=passive_trade_rate)
         annualized_std_dev = (df[strategy_daily_return_col] - np.abs(df[strategy_trade_count_col]) *
