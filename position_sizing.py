@@ -117,8 +117,9 @@ def get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mav
         df[actual_position_notional_col].loc[date] = 0.0
         df[actual_position_entry_price_col].loc[date] = 0.0
         df[actual_position_size_col].loc[date] = 0.0
+        # df[stop_loss_col]
         df[event_col].loc[date] = np.nan
-
+        ## TODO: Fix Stop Loss Logic
         ## Taking a New Long position
         if (df[signal_col].loc[date] == 1) and (df[signal_col].loc[previous_date] == 0) and (
                 df[actual_position_notional_col].loc[previous_date] == 0):

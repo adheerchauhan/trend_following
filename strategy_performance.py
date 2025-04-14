@@ -61,25 +61,22 @@ def calculate_drawdown(df, strategy_daily_return_col, strategy_trade_count_col, 
         average_fee_per_trade = estimate_fee_per_trade(passive_trade_rate=passive_trade_rate)
         adjusted_daily_returns = df[strategy_daily_return_col] - (
                     np.abs(df[strategy_trade_count_col]) * (transaction_cost_est + average_fee_per_trade))
-        df['strategy_cumulative_return'] = (1 + adjusted_daily_returns).cumprod() - 1
+        df['equity_curve'] = (1 + adjusted_daily_returns).cumprod()
     else:
-        df['strategy_cumulative_return'] = (1 + df[strategy_daily_return_col]).cumprod() - 1
-    df[f'strategy_cumulative_return_cum_max'] = df['strategy_cumulative_return'].cummax()
-    df[f'strategy_cumulative_return_drawdown'] = df['strategy_cumulative_return'] - df[
-        f'strategy_cumulative_return_cum_max']
-    df[f'strategy_cumulative_return_drawdown_pct'] = df[f'strategy_cumulative_return_drawdown'] / df[
-        f'strategy_cumulative_return_cum_max']
+        df['equity_curve'] = (1 + df[strategy_daily_return_col]).cumprod()
+    df[f'equity_curve_cum_max'] = df['equity_curve'].cummax()
+    df[f'drawdown'] = df['equity_curve'] - df[f'equity_curve_cum_max']
+    df[f'drawdown_pct'] = df[f'drawdown'] / df[f'equity_curve_cum_max']
     df.replace([np.inf, -np.inf, np.nan], 0, inplace=True)
 
     # Calculate maximum drawdown
-    max_drawdown = df[f'strategy_cumulative_return_drawdown_pct'].min()
+    max_drawdown = df[f'drawdown_pct'].min()
 
     # Calculate maximum drawdown duration
     df['End'] = df.index
-    df['Start'] = df[f'strategy_cumulative_return_cum_max'].ne(
-        df[f'strategy_cumulative_return_cum_max'].shift(1)).cumsum()
-    df[f'strategy_cumulative_return_DDDuration'] = df.groupby('Start')['End'].transform(lambda x: x.max() - x.min())
-    max_drawdown_duration = df[f'strategy_cumulative_return_DDDuration'].max()
+    df['Start'] = df[f'equity_curve_cum_max'].ne(df[f'equity_curve_cum_max'].shift(1)).cumsum()
+    df[f'equity_curve_DDDuration'] = df.groupby('Start')['End'].transform(lambda x: x.max() - x.min())
+    max_drawdown_duration = df[f'equity_curve_DDDuration'].max()
 
     # Drop NaN values for better display
     #     df = df.dropna(inplace=True)
