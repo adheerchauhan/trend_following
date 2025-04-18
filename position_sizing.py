@@ -117,8 +117,8 @@ def get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mav
         df[actual_position_notional_col].loc[date] = 0.0
         df[actual_position_entry_price_col].loc[date] = 0.0
         df[actual_position_size_col].loc[date] = 0.0
-        # df[stop_loss_col]
         df[event_col].loc[date] = np.nan
+
         ## TODO: Fix Stop Loss Logic
         ## Taking a New Long position
         if (df[signal_col].loc[date] == 1) and (df[signal_col].loc[previous_date] == 0) and (
@@ -126,13 +126,13 @@ def get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mav
             # Building a cash buffer
             available_cash_buffer = df['available_cash'].loc[date] * (1 - 0.10)
             target_long_notional = min(df[target_position_notional_col].loc[date], available_cash_buffer)
-            # target_long_notional = df[target_position_notional_col].loc[date]
             if target_long_notional > 0:
                 net_long_notional = target_long_notional * (1 - est_fees)
                 df[actual_position_notional_col].loc[date] = net_long_notional
                 df[actual_position_entry_price_col].loc[date] = df[open_price_col].loc[date]
                 df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
                                                           df[actual_position_entry_price_col].loc[date])
+                df[stop_loss_col].loc[date] = df[upper_donchian_channel].loc[date]
                 df['available_cash'].loc[date] = df['available_cash'].loc[date] - target_long_notional
                 df[event_col].loc[date] = 'New Long Position'
             else:
@@ -144,13 +144,13 @@ def get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mav
             # Building a cash buffer
             available_cash_buffer = df['available_cash'].loc[date] * (1 - 0.10)
             target_short_notional = min(df[target_position_notional_col].loc[date], available_cash_buffer)
-            # target_short_notional = df[target_position_notional_col].loc[date]
             if target_short_notional > 0:
                 net_short_notional = -(target_short_notional * (1 - est_fees))
                 df[actual_position_notional_col].loc[date] = net_short_notional
                 df[actual_position_entry_price_col].loc[date] = df[open_price_col].loc[date]
                 df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
                                                           df[actual_position_entry_price_col].loc[date])
+                df[stop_loss_col].loc[date] = df[lower_donchian_channel].loc[date]
                 df[short_sale_proceeds_col].loc[date] = -net_short_notional
                 df[event_col].loc[date] = 'New Short Position'
             else:
@@ -159,14 +159,18 @@ def get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mav
         ## Open Long Position
         elif (df[signal_col].loc[date] == 1) and (df[signal_col].loc[previous_date] == 1):
             if df[actual_position_notional_col].loc[previous_date] > 0:
-                if df[open_price_col].loc[date] < df[upper_donchian_channel].loc[date]:
-                    df[actual_position_notional_col].loc[date] = 0
-                    df[actual_position_entry_price_col].loc[date] = 0
-                    df[actual_position_size_col].loc[date] = 0
-                    df[actual_position_exit_price_col].loc[date] = df[open_price_col].loc[date]
+                df[stop_loss_col].loc[date] = df[upper_donchian_channel].loc[date]
+                ## Stop Loss was breached for long position
+                # if ((df[actual_position_entry_price_col].loc[date] > df[stop_loss_col].loc[date]) and
+                #         (df[open_price_col].loc[date] < df[stop_loss_col].loc[date])):
+                if df[t_1_close_price_col].loc[date] < df[stop_loss_col].loc[previous_date]:
+                    df[actual_position_exit_price_col].loc[date] = df[stop_loss_col].loc[date]
                     closing_long_market_value = (df[actual_position_size_col].loc[previous_date] *
                                                  df[actual_position_exit_price_col].loc[date])
                     net_closing_long_market_value = closing_long_market_value * (1 - est_fees)
+                    df[actual_position_notional_col].loc[date] = 0
+                    df[actual_position_entry_price_col].loc[date] = 0
+                    df[actual_position_size_col].loc[date] = 0
                     df['available_cash'].loc[date] = (df['available_cash'].loc[date] + net_closing_long_market_value)
                     df[event_col].loc[date] = 'Closing Long Position'
                 else:
@@ -181,16 +185,20 @@ def get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mav
         ## Open Short Position
         elif (df[signal_col].loc[date] == -1) and (df[signal_col].loc[previous_date] == -1):
             if df[actual_position_notional_col].loc[previous_date] < 0:
-                if df[open_price_col].loc[date] > df[lower_donchian_channel].loc[date]:
-                    df[actual_position_notional_col].loc[date] = 0
-                    df[actual_position_entry_price_col].loc[date] = 0
-                    df[actual_position_size_col].loc[date] = 0
-                    df[actual_position_exit_price_col].loc[date] = df[open_price_col].loc[date]
-                    df[short_sale_proceeds_col].loc[date] = 0.0
+                df[stop_loss_col].loc[date] = df[lower_donchian_channel].loc[date]
+                ## Stop Loss was breached for short position
+                # if ((df[actual_position_entry_price_col].loc[date] < df[stop_loss_col].loc[date]) and
+                #         (df[open_price_col].loc[date] > df[stop_loss_col].loc[date])):
+                if df[t_1_close_price_col].loc[date] > df[stop_loss_col].loc[previous_date]:
+                    df[actual_position_exit_price_col].loc[date] = df[stop_loss_col].loc[date]
                     closing_short_market_value = (df[actual_position_size_col].loc[previous_date] *
                                                   df[actual_position_exit_price_col].loc[date])
                     net_closing_short_market_value = closing_short_market_value * (1 - est_fees)
                     short_sale_proceeds = df[short_sale_proceeds_col].loc[previous_date]
+                    df[actual_position_notional_col].loc[date] = 0
+                    df[actual_position_entry_price_col].loc[date] = 0
+                    df[actual_position_size_col].loc[date] = 0
+                    df[short_sale_proceeds_col].loc[date] = 0.0
                     df['available_cash'].loc[date] = (df['available_cash'].loc[date] +
                                                       (net_closing_short_market_value + short_sale_proceeds))
                     df[event_col].loc[date] = 'Closing Short Position'
@@ -216,6 +224,7 @@ def get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mav
                     df[actual_position_entry_price_col].loc[date] = df[open_price_col].loc[date]
                     df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
                                                               df[actual_position_entry_price_col].loc[date])
+                    df[stop_loss_col].loc[date] = df[upper_donchian_channel].loc[date]
                     df[short_sale_proceeds_col].loc[date] = 0.0
                     df['available_cash'].loc[date] = df['available_cash'].loc[date] - target_long_notional
                     df[event_col].loc[date] = 'New Long with Open Short Position'
@@ -236,6 +245,7 @@ def get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mav
                     df[actual_position_entry_price_col].loc[date] = df[open_price_col].loc[date]
                     df[actual_position_size_col].loc[date] = (df[actual_position_notional_col].loc[date] /
                                                               df[actual_position_entry_price_col].loc[date])
+                    df[stop_loss_col].loc[date] = df[lower_donchian_channel].loc[date]
                     df[short_sale_proceeds_col].loc[date] = -net_short_notional
                     df[event_col].loc[date] = 'New Short with Open Long Position'
                 else:
@@ -246,16 +256,21 @@ def get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mav
         ## Closing a Long Position
         elif (df[signal_col].loc[date] == 0) and (df[signal_col].loc[previous_date] == 1):
             if df[actual_position_notional_col].loc[previous_date] > 0:
-                df[actual_position_notional_col].loc[date] = 0
-                df[actual_position_entry_price_col].loc[date] = 0
-                df[actual_position_size_col].loc[date] = 0
-                if df[open_price_col].loc[date] < df[upper_donchian_channel].loc[date]:
-                    df[actual_position_exit_price_col].loc[date] = df[upper_donchian_channel].loc[date]
+                df[stop_loss_col].loc[date] = df[upper_donchian_channel].loc[date]
+                ## Stop Loss was breached when closing a long position
+                # if ((df[actual_position_entry_price_col].loc[date] > df[stop_loss_col].loc[date]) and
+                # if ((df[open_price_col].loc[previous_date] > df[stop_loss_col].loc[previous_date]) and
+                #         (df[open_price_col].loc[date] < df[stop_loss_col].loc[date])):
+                if df[t_1_close_price_col].loc[date] < df[stop_loss_col].loc[previous_date]:
+                    df[actual_position_exit_price_col].loc[date] = df[stop_loss_col].loc[previous_date]
                 else:
                     df[actual_position_exit_price_col].loc[date] = df[open_price_col].loc[date]
                 closing_long_market_value = (df[actual_position_size_col].loc[previous_date] *
                                              df[actual_position_exit_price_col].loc[date])
                 net_closing_long_market_value = closing_long_market_value * (1 - est_fees)
+                df[actual_position_notional_col].loc[date] = 0
+                df[actual_position_entry_price_col].loc[date] = 0
+                df[actual_position_size_col].loc[date] = 0
                 df['available_cash'].loc[date] = (df['available_cash'].loc[date] + net_closing_long_market_value)
                 df[event_col].loc[date] = 'Closing Long Position'
             else:
@@ -264,18 +279,23 @@ def get_daily_positions_and_portfolio_cash(df, date, ticker_list, fast_mavg, mav
         ## Closing a Short Position
         elif (df[signal_col].loc[date] == 0) and (df[signal_col].loc[previous_date] == -1):
             if df[actual_position_notional_col].loc[previous_date] < 0:
-                df[actual_position_notional_col].loc[date] = 0
-                df[actual_position_entry_price_col].loc[date] = 0
-                df[actual_position_size_col].loc[date] = 0
-                if df[open_price_col].loc[date] > df[lower_donchian_channel].loc[date]:
-                    df[actual_position_exit_price_col].loc[date] = df[lower_donchian_channel].loc[date]
+                df[stop_loss_col].loc[date] = df[lower_donchian_channel].loc[date]
+                ## Stop Loss was breached when closing a short position
+                # if ((df[actual_position_entry_price_col].loc[date] < df[stop_loss_col].loc[date]) and
+                # if ((df[open_price_col].loc[previous_date] < df[stop_loss_col].loc[previous_date]) and
+                #         (df[open_price_col].loc[date] > df[stop_loss_col].loc[date])):
+                if df[t_1_close_price_col].loc[date] > df[stop_loss_col].loc[previous_date]:
+                    df[actual_position_exit_price_col].loc[date] = df[stop_loss_col].loc[previous_date]
                 else:
                     df[actual_position_exit_price_col].loc[date] = df[open_price_col].loc[date]
-                df[short_sale_proceeds_col].loc[date] = 0.0
                 closing_short_market_value = (df[actual_position_size_col].loc[previous_date] *
                                               df[actual_position_exit_price_col].loc[date])
                 net_closing_short_market_value = closing_short_market_value * (1 - est_fees)
                 short_sale_proceeds = df[short_sale_proceeds_col].loc[previous_date]
+                df[actual_position_notional_col].loc[date] = 0
+                df[actual_position_entry_price_col].loc[date] = 0
+                df[actual_position_size_col].loc[date] = 0
+                df[short_sale_proceeds_col].loc[date] = 0.0
                 df['available_cash'].loc[date] = (df['available_cash'].loc[date] +
                                                   (net_closing_short_market_value + short_sale_proceeds))
                 df[event_col].loc[date] = 'Closing Short Position'
