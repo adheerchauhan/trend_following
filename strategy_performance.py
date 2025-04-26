@@ -164,17 +164,15 @@ def calculate_sharpe_ratio(df, strategy_daily_return_col, strategy_trade_count_c
     daily_rf = (1 + annual_rf) ** (1/annual_trading_days) - 1
     if include_transaction_costs_and_fees:
         average_fee_per_trade = estimate_fee_per_trade(passive_trade_rate=passive_trade_rate)
-        average_daily_return = (
-                df[strategy_daily_return_col] - np.abs(df[strategy_trade_count_col]) *
-                (transaction_cost_est + average_fee_per_trade)).mean()
-        std_dev_daily_return = (
-                df[strategy_daily_return_col] - np.abs(df[strategy_trade_count_col]) *
-                (transaction_cost_est + average_fee_per_trade)).std()
+        daily_cost = np.abs(df[strategy_trade_count_col]) * (transaction_cost_est + average_fee_per_trade)
     else:
-        average_daily_return = df[strategy_daily_return_col].mean()
-        std_dev_daily_return = df[strategy_daily_return_col].std()
+        daily_cost = 0.0
 
-    daily_sharpe_ratio = (average_daily_return - daily_rf)/std_dev_daily_return
+    excess_return = df[strategy_daily_return_col] - daily_cost - daily_rf
+    average_daily_return = excess_return.mean()
+    std_dev_daily_return = excess_return.std()
+
+    daily_sharpe_ratio = average_daily_return/std_dev_daily_return
     annualized_sharpe_ratio = daily_sharpe_ratio * np.sqrt(annual_trading_days)
 
     return annualized_sharpe_ratio

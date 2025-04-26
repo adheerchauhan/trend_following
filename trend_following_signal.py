@@ -477,7 +477,7 @@ def generate_trend_signal_with_donchian_channel(start_date, end_date, ticker, fa
     # Pull Close Prices from Coinbase
     df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
                                                         end_date=end_date, save_to_file=False)
-    df = (df[['close','open']].rename(columns={'close': f'{ticker}_close', 'open': f'{ticker}_open'}))
+    df = (df[['close', 'open']].rename(columns={'close': f'{ticker}_close', 'open': f'{ticker}_open'}))
     df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
 
     # Generate Trend Signal
