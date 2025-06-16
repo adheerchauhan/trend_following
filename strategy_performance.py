@@ -1,6 +1,6 @@
 import numpy as np
 from scipy import stats
-
+import matplotlib.pyplot as plt
 
 def estimate_fee_per_trade(passive_trade_rate=0.5):
     ## Maker/Taker Fee based on lowest tier at Coinbase
@@ -266,3 +266,25 @@ def rolling_sharpe_ratio(df, window, strategy_daily_return_col, strategy_trade_c
     )
 
     return rolling_sharpe
+
+
+def plot_daily_returns_bubble(df, return_col='daily_return'):
+
+    df['color'] = df[return_col].apply(lambda x: 'green' if x >= 0 else 'red')
+    df['size'] = df[return_col].abs() * 1000  # scale for visibility
+
+    plt.figure(figsize=(14, 6))
+    plt.scatter(df.index, df[return_col],
+                c=df['color'],
+                s=df['size'],
+                alpha=0.6, edgecolors='k')
+
+    plt.title('Daily Returns Bubble Plot')
+    plt.xlabel('Date')
+    plt.ylabel('Daily Return')
+    plt.axhline(0, color='black', linestyle='--', linewidth=1)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.show()
+
+    return
