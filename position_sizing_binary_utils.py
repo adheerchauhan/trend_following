@@ -497,11 +497,23 @@ def apply_target_volatility_position_sizing_strategy(start_date, end_date, ticke
 
 
 def calculate_average_true_range(start_date, end_date, ticker, price_or_returns_calc='price', rolling_atr_window=20,
-                                 use_coinbase_data=True):
+                                 use_coinbase_data=True, use_saved_files=False, saved_file_end_date='2025-06-30'):
     if use_coinbase_data:
-        # df = cn.get_coinbase_ohlc_data(ticker=ticker)
-        df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, end_date=end_date, save_to_file=False)
-        df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
+        date_list = cn.coinbase_start_date_by_ticker_dict
+        if use_saved_files:
+            file_start_date = date_list[ticker]
+            file_end_date = pd.Timestamp(saved_file_end_date).date()
+            filename = (f"{ticker}-pickle-{pd.Timestamp(file_start_date).strftime('%Y-%m-%d')}-"
+                        f"{file_end_date.strftime('%Y-%m-%d')}")
+            output_file = f'coinbase_historical_price_folder/{filename}'
+            df = pd.read_pickle(output_file)
+            date_cond = ((df.index.get_level_values('date') >= start_date) &
+                         (df.index.get_level_values('date') <= end_date))
+            df = df[date_cond]
+        else:
+            # df = cn.get_coinbase_ohlc_data(ticker=ticker)
+            df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, end_date=end_date, save_to_file=False)
+            df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
         df.columns = [f'{ticker}_{x}' for x in df.columns]
     else:
         df = tf.load_financial_data(start_date, end_date, ticker, print_status=False)  # .shift(1)

@@ -31,7 +31,8 @@ import trend_following_signal as tf
 
 
 def get_average_true_range_portfolio(start_date, end_date, ticker_list, rolling_atr_window=20,
-                                     price_or_returns_calc='price', use_coinbase_data=True):
+                                     price_or_returns_calc='price', use_coinbase_data=True, use_saved_files=False,
+                                     saved_file_end_date='2025-06-30'):
 
     atr_list = []
     for ticker in ticker_list:
@@ -39,7 +40,9 @@ def get_average_true_range_portfolio(start_date, end_date, ticker_list, rolling_
         df_atr = size_bin.calculate_average_true_range(start_date=start_date, end_date=end_date, ticker=ticker,
                                                        price_or_returns_calc=price_or_returns_calc,
                                                        rolling_atr_window=rolling_atr_window,
-                                                       use_coinbase_data=use_coinbase_data)
+                                                       use_coinbase_data=use_coinbase_data,
+                                                       use_saved_files=use_saved_files,
+                                                       saved_file_end_date=saved_file_end_date)
         atr_list.append(df_atr[atr_cols])
 
     df_atr_concat = pd.concat(atr_list, axis=1)
