@@ -464,6 +464,59 @@ def calculate_on_balance_volume(start_date, end_date, ticker, use_coinbase_data=
     return df
 
 
+def calculate_average_directional_index(start_date, end_date, ticker, adx_period, use_coinbase_data):
+    ## Convert number of bars to days. ## alpha = 2/(span + 1) for the Exponentially Weighted Average
+    ## If alpha = 1/n, span = 2*n - 1
+    adx_atr_window = 2 * adx_period - 1
+
+    ## Pull Market Data
+    if use_coinbase_data:
+        # df = cn.get_coinbase_ohlc_data(ticker=ticker)
+        df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, end_date=end_date, save_to_file=False)
+        df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
+        df.columns = [f'{ticker}_{x}' for x in df.columns]
+    else:
+        df = load_financial_data(start_date, end_date, ticker, print_status=False)  # .shift(1)
+        df.columns = [f'{ticker}_open', f'{ticker}_high', f'{ticker}_low', f'{ticker}_close', f'{ticker}_adjclose',
+                      f'{ticker}_volume']
+
+    ## Calculate Directional Move
+    df[f'{ticker}_up_move'] = df[f'{ticker}_high'].diff()
+    df[f'{ticker}_down_move'] = -df[f'{ticker}_low'].diff()
+
+    plus_dir_move_cond = (df[f'{ticker}_up_move'] > df[f'{ticker}_down_move']) & (df[f'{ticker}_up_move'] > 0)
+    minus_dir_move_cond = (df[f'{ticker}_down_move'] > df[f'{ticker}_up_move']) & (df[f'{ticker}_down_move'] > 0)
+    df[f'{ticker}_plus_dir_move'] = np.where(plus_dir_move_cond, df[f'{ticker}_up_move'], 0)
+    df[f'{ticker}_minus_dir_move'] = np.where(minus_dir_move_cond, df[f'{ticker}_down_move'], 0)
+
+    ## Calculate the True Range (TR) and Average True Range (ATR)
+    df[f'{ticker}_high-low'] = df[f'{ticker}_high'] - df[f'{ticker}_low']
+    df[f'{ticker}_high-close'] = np.abs(df[f'{ticker}_high'] - df[f'{ticker}_close'].shift(1))
+    df[f'{ticker}_low-close'] = np.abs(df[f'{ticker}_low'] - df[f'{ticker}_close'].shift(1))
+    df[f'{ticker}_true_range_price'] = df[[f'{ticker}_high-low', f'{ticker}_high-close', f'{ticker}_low-close']].max(
+        axis=1)
+    df[f'{ticker}_{adx_atr_window}_avg_true_range'] = df[f'{ticker}_true_range_price'].ewm(span=adx_atr_window,
+                                                                                           adjust=False).mean()
+
+    ## Calculate the exponentially weighted directional moves
+    df[f'{ticker}_plus_dir_move_exp'] = df[f'{ticker}_plus_dir_move'].ewm(span=adx_atr_window, adjust=False).mean()
+    df[f'{ticker}_minus_dir_move_exp'] = df[f'{ticker}_minus_dir_move'].ewm(span=adx_atr_window, adjust=False).mean()
+
+    ## Calculate the directional indicator
+    df[f'{ticker}_plus_dir_ind'] = 100 * (
+                df[f'{ticker}_plus_dir_move_exp'] / df[f'{ticker}_{adx_atr_window}_avg_true_range'])
+    df[f'{ticker}_minus_dir_ind'] = 100 * (
+                df[f'{ticker}_minus_dir_move_exp'] / df[f'{ticker}_{adx_atr_window}_avg_true_range'])
+    df[f'{ticker}_dir_ind'] = 100 * np.abs((df[f'{ticker}_plus_dir_ind'] - df[f'{ticker}_minus_dir_ind'])) / (
+                df[f'{ticker}_plus_dir_ind'] + df[f'{ticker}_minus_dir_ind'])
+    df[f'{ticker}_avg_dir_ind'] = df[f'{ticker}_dir_ind'].ewm(span=adx_atr_window, adjust=False).mean()
+
+    ## Shift by a day to avoid look-ahead bias
+    df[f'{ticker}_avg_dir_ind'] = df[f'{ticker}_avg_dir_ind'].shift(1)
+
+    return df[[f'{ticker}_avg_dir_ind']]
+
+
 def generate_trend_signal_with_donchian_channel(start_date, end_date, ticker, fast_mavg, slow_mavg, mavg_stepsize,
                                                 moving_avg_type='exponential', price_or_returns_calc='price',
                                                 rolling_donchian_window=20, long_only=False, use_coinbase_data=True):
