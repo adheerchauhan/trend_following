@@ -288,11 +288,11 @@ def calculate_donchian_channels(start_date, end_date, ticker, price_or_returns_c
     if price_or_returns_calc == 'price':
         # Rolling maximum of returns (upper channel)
         df[f'{ticker}_{rolling_donchian_window}_donchian_upper_band_{price_or_returns_calc}'] = (
-            df[f'close'].rolling(window=rolling_donchian_window).max())
+            df[f'high'].rolling(window=rolling_donchian_window).max())
 
         # Rolling minimum of returns (lower channel)
         df[f'{ticker}_{rolling_donchian_window}_donchian_lower_band_{price_or_returns_calc}'] = (
-            df[f'close'].rolling(window=rolling_donchian_window).min())
+            df[f'low'].rolling(window=rolling_donchian_window).min())
 
     elif price_or_returns_calc == 'returns':
         # Calculate Percent Returns
