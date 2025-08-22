@@ -3,27 +3,6 @@ import os
 import sys
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-import matplotlib.ticker as mtick
-from sklearn.decomposition import PCA
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn import linear_model
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import pandas_datareader as pdr
-import math
-import datetime
-import itertools
-import yfinance as yf
-import seaborn as sn
-from IPython.display import display, HTML
-from trend_following_signal import (apply_jupyter_fullscreen_css, load_financial_data, get_returns_volatility,
-                                    calculate_slope, trend_signal, slope_signal, create_trend_strategy,
-                                    get_close_prices, calculate_donchian_channels)
-from strategy_performance import (calculate_sharpe_ratio, calculate_calmar_ratio, calculate_CAGR,
-                                  calculate_risk_and_performance_metrics, calculate_compounded_cumulative_returns,
-                                  estimate_fee_per_trade, rolling_sharpe_ratio)
 import coinbase_utils as cn
 import strategy_performance as perf
 import position_sizing_binary_utils as size_bin

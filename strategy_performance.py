@@ -1,5 +1,7 @@
 import numpy as np
+import pandas as pd
 from scipy import stats
+import coinbase_utils as cn
 import matplotlib.pyplot as plt
 
 def estimate_fee_per_trade(passive_trade_rate=0.5):
@@ -266,6 +268,20 @@ def rolling_sharpe_ratio(df, window, strategy_daily_return_col, strategy_trade_c
     )
 
     return rolling_sharpe
+
+
+def calculate_asset_level_returns(df, end_date, ticker_list):
+    ## Check if data is available for all the tickers
+    date_list = cn.coinbase_start_date_by_ticker_dict
+    ticker_list = [ticker for ticker in ticker_list if pd.Timestamp(date_list[ticker]).date() < end_date]
+
+    for ticker in ticker_list:
+        df[f'{ticker}_daily_pnl'] = (df[f'{ticker}_actual_position_size'] * df[f'{ticker}_open'].diff().shift(-1))
+        df[f'{ticker}_daily_pct_returns'] = (df[f'{ticker}_daily_pnl'] / df[f'total_portfolio_value'].shift(1)).fillna(
+            0)
+        df[f'{ticker}_position_count'] = np.where((df[f'{ticker}_actual_position_notional'] != 0), 1,
+                                                  0)  ## This is not entirely accurate
+    return df
 
 
 def plot_daily_returns_bubble(df, return_col='daily_return'):

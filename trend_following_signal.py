@@ -15,6 +15,10 @@ import itertools
 import yfinance as yf
 import coinbase_utils as cn
 import seaborn as sn
+import scipy
+from scipy.stats import linregress
+import position_sizing_continuous_utils as size_cont
+import position_sizing_binary_utils as size_bin
 from IPython.display import display, HTML
 
 
@@ -517,6 +521,236 @@ def calculate_average_directional_index(start_date, end_date, ticker, adx_period
     return df[[f'{ticker}_avg_dir_ind']]
 
 
+def calc_ribbon_slope(row, ticker, fast_mavg, slow_mavg, mavg_stepsize):
+    x = np.linspace(slow_mavg, fast_mavg, mavg_stepsize)
+    y = row.values
+    slope, _, _, _, _ = linregress(x, y)
+    return slope
+
+
+def pct_rank(x, window=250):
+    return x.rank(pct=True)
+
+
+def create_trend_strategy_log_space(df, ticker, mavg_start, mavg_end, mavg_stepsize, mavg_z_score_window=252):
+    # ---- constants ----
+    windows = np.geomspace(mavg_start, mavg_end, mavg_stepsize).round().astype(int)
+    windows = np.unique(windows)
+    x = np.log(windows[::-1])
+    xm = x - x.mean()
+    varx = (xm ** 2).sum()
+
+    # ---- compute MAs (vectorised) ----
+    df[f'{ticker}_close_log'] = np.log(df[f'{ticker}_close'])
+    for w in windows:
+        df[f'{ticker}_{w}_ema'] = df[f'{ticker}_close_log'].ewm(span=w, adjust=False).mean()
+
+    mavg_mat = df[[f'{ticker}_{w}_ema' for w in windows]].to_numpy()
+
+    # ---- slope (vectorised) ----
+    slope = mavg_mat.dot(xm) / varx  # ndarray (T,)
+    slope = pd.Series(slope, index=df.index).shift(1)  # lag to avoid look-ahead
+
+    # ---- z-score & rank ----
+    z = ((slope - slope.rolling(mavg_z_score_window, min_periods=mavg_z_score_window).mean()) /
+         slope.rolling(mavg_z_score_window, min_periods=mavg_z_score_window).std())
+
+    # Optional Tail Cap
+    z = z.clip(-4, 4)
+
+    # Calculate the Percentile Rank based on CDF
+    rank = scipy.stats.norm.cdf(z) - 0.5  # centred 0↔±0.5
+
+    trend_continuous_signal_col = f'{ticker}_mavg_ribbon_slope'
+    trend_continuous_signal_rank_col = f'{ticker}_mavg_ribbon_rank'
+    df[trend_continuous_signal_col] = slope
+    df[trend_continuous_signal_rank_col] = rank
+
+    return df
+
+
+def calculate_donchian_channel_dual_window(start_date, end_date, ticker, price_or_returns_calc='price',
+                                           entry_rolling_donchian_window=20, exit_rolling_donchian_window=20,
+                                           use_coinbase_data=True, use_saved_files=True,
+                                           saved_file_end_date='2025-07-31'):
+    if use_coinbase_data:
+        if use_saved_files:
+            date_list = cn.coinbase_start_date_by_ticker_dict
+            file_end_date = pd.Timestamp(saved_file_end_date).date()
+            filename = f"{ticker}-pickle-{pd.Timestamp(date_list[ticker]).strftime('%Y-%m-%d')}-{file_end_date.strftime('%Y-%m-%d')}"
+            output_file = f'coinbase_historical_price_folder/{filename}'
+            df = pd.read_pickle(output_file)
+            date_cond = (df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)
+            df = df[date_cond]
+        else:
+            # df = cn.get_coinbase_ohlc_data(ticker=ticker)
+            df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True,
+                                                                start_date=start_date,
+                                                                end_date=end_date, save_to_file=False)
+            df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
+    else:
+        df = load_financial_data(start_date, end_date, ticker, print_status=False)  # .shift(1)
+        df.columns = ['open', 'high', 'low', 'close', 'adjclose', 'volume']
+
+    if price_or_returns_calc == 'price':
+        ## Entry Channel
+        # Rolling maximum of returns (upper channel)
+        df[f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_upper_band_{price_or_returns_calc}'] = (
+            df[f'high'].rolling(window=entry_rolling_donchian_window).max())
+
+        # Rolling minimum of returns (lower channel)
+        df[f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_lower_band_{price_or_returns_calc}'] = (
+            df[f'low'].rolling(window=entry_rolling_donchian_window).min())
+
+        ## Exit Channel
+        # Rolling maximum of returns (upper channel)
+        df[f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_upper_band_{price_or_returns_calc}'] = (
+            df[f'high'].rolling(window=exit_rolling_donchian_window).max())
+
+        # Rolling minimum of returns (lower channel)
+        df[f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_lower_band_{price_or_returns_calc}'] = (
+            df[f'low'].rolling(window=exit_rolling_donchian_window).min())
+
+    elif price_or_returns_calc == 'returns':
+        # Calculate Percent Returns
+        df[f'{ticker}_pct_returns'] = df[f'close'].pct_change()
+
+        ## Entry Channel
+        # Rolling maximum of returns (upper channel)
+        df[f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_upper_band_{price_or_returns_calc}'] = df[
+            f'{ticker}_pct_returns'].rolling(window=entry_rolling_donchian_window).max()
+
+        # Rolling minimum of returns (lower channel)
+        df[f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_lower_band_{price_or_returns_calc}'] = df[
+            f'{ticker}_pct_returns'].rolling(window=entry_rolling_donchian_window).min()
+
+        ## Exit Channel
+        # Rolling maximum of returns (upper channel)
+        df[f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_upper_band_{price_or_returns_calc}'] = df[
+            f'{ticker}_pct_returns'].rolling(window=exit_rolling_donchian_window).max()
+
+        # Rolling minimum of returns (lower channel)
+        df[f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_lower_band_{price_or_returns_calc}'] = df[
+            f'{ticker}_pct_returns'].rolling(window=exit_rolling_donchian_window).min()
+
+    # Middle of the channel (optional, could be just average of upper and lower)
+    # Entry Middle Band
+    df[f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_middle_band_{price_or_returns_calc}'] = (
+        (df[f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_upper_band_{price_or_returns_calc}'] +
+         df[f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_lower_band_{price_or_returns_calc}']) / 2)
+
+    # Exit Middle Band
+    df[f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_middle_band_{price_or_returns_calc}'] = (
+        (df[f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_upper_band_{price_or_returns_calc}'] +
+         df[f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_lower_band_{price_or_returns_calc}']) / 2)
+
+    # Shift only the Keltner channel metrics to avoid look-ahead bias
+    shift_columns = [
+        f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_middle_band_{price_or_returns_calc}',
+        f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_upper_band_{price_or_returns_calc}',
+        f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_lower_band_{price_or_returns_calc}',
+        f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_middle_band_{price_or_returns_calc}',
+        f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_upper_band_{price_or_returns_calc}',
+        f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_lower_band_{price_or_returns_calc}'
+    ]
+    df[shift_columns] = df[shift_columns].shift(1)
+
+    return df
+
+
+def calculate_rolling_r2(df, ticker, t_1_close_price_col, rolling_r2_window=30, lower_r_sqr_limit=0.2,
+                         upper_r_sqr_limit=0.8, r2_smooth_window=3):
+    log_price_col = f'{ticker}_t_1_close_price_log'
+    df[log_price_col] = np.log(df[t_1_close_price_col])
+
+    ## Define the variables
+    y = df[log_price_col]
+    x = np.arange(len(y), dtype=float)  # Time
+
+    ## Compute rolling sums for rolling R2 calculation
+    x_sum = pd.Series(x, y.index).rolling(rolling_r2_window, min_periods=rolling_r2_window).sum()
+    y_sum = y.rolling(rolling_r2_window, min_periods=rolling_r2_window).sum()
+    x_sqr = pd.Series(x ** 2, y.index).rolling(rolling_r2_window, min_periods=rolling_r2_window).sum()
+    y_sqr = (y ** 2).rolling(rolling_r2_window, min_periods=rolling_r2_window).sum()
+    xy_sum = pd.Series(x, y.index).mul(y).rolling(rolling_r2_window, min_periods=rolling_r2_window).sum()
+
+    ## Calculate the R squared
+    n = rolling_r2_window
+    numerator = n * xy_sum - x_sum * y_sum
+    denominator = np.sqrt((n * x_sqr) - (x_sum ** 2)) * np.sqrt((n * y_sqr) - (y_sum ** 2))
+    df[f'{ticker}_rolling_r_sqr'] = (numerator / denominator) ** 2
+
+    ## Normalize the R Squared centered around 0.5 where values below the lower limit are
+    ## clipped to 0 and values above the upper limit are clipped to 1
+    df[f'{ticker}_rolling_r_sqr'] = np.clip(
+        (df[f'{ticker}_rolling_r_sqr'] - lower_r_sqr_limit) / (upper_r_sqr_limit - lower_r_sqr_limit),
+        0, 1)
+
+    ## Smoothing the Rolling R Squared Signal
+    if r2_smooth_window >= 1:
+        df[f'{ticker}_rolling_r_sqr'] = df[f'{ticker}_rolling_r_sqr'].ewm(span=r2_smooth_window, adjust=False).mean()
+
+    ## Adding Convex Scaling to further reduce the signal during low trends and amplify during high trends
+    # df[f'{ticker}_rolling_r_sqr'] = df[f'{ticker}_rolling_r_sqr'].clip(0, 1) ** 1.5
+
+    return df
+
+
+def generate_vol_of_vol_signal_log_space(df, ticker, t_1_close_price_col, log_std_window=14,
+                                         coef_of_variation_window=30, vol_of_vol_z_score_window=252,
+                                         vol_of_vol_p_min=0.6):
+
+    log_returns_col = f'{ticker}_t_1_log_returns'
+    realized_log_returns_vol = f'{ticker}_ann_log_volatility'
+    df[log_returns_col] = np.log(df[t_1_close_price_col] / df[t_1_close_price_col].shift(1))
+    eps = 1e-12
+
+    ## Realized Volatility of Log Returns
+    df[realized_log_returns_vol] = df[log_returns_col].ewm(span=log_std_window, adjust=False,
+                                                           min_periods=log_std_window).std() * np.sqrt(365)
+
+    ## Coefficient of Variation in Volatility
+    df[f'{ticker}_coef_variation_vol'] = (
+            df[realized_log_returns_vol].rolling(coef_of_variation_window,
+                                                 min_periods=coef_of_variation_window).std() /
+            df[realized_log_returns_vol].rolling(coef_of_variation_window,
+                                                 min_periods=coef_of_variation_window).mean().clip(lower=eps))
+
+    ## Calculate Robust Z-Score of the Coefficient of Varaition
+    cov_rolling_median = df[f'{ticker}_coef_variation_vol'].rolling(vol_of_vol_z_score_window,
+                                                                    min_periods=vol_of_vol_z_score_window).median()
+    df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median'] = cov_rolling_median
+    cov_rolling_mad = ((df[f'{ticker}_coef_variation_vol'] -
+                        df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median']).abs()
+                       .rolling(vol_of_vol_z_score_window, min_periods=vol_of_vol_z_score_window).median())
+    df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median_abs_dev'] = cov_rolling_mad
+    df[f'{ticker}_vol_of_vol_robust_z_score'] = ((df[f'{ticker}_coef_variation_vol'] -
+                                                  df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median']) /
+                                                 (1.4826 * df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median_abs_dev']).clip(lower=eps))
+    df[f'{ticker}_vol_of_vol_robust_z_score'] = (df[f'{ticker}_vol_of_vol_robust_z_score']
+                                                 .replace([np.inf, -np.inf], 0.0).fillna(0.0).clip(lower=-3, upper=3))
+
+    ## Create Vol of Vol Thresholds
+    ## z0 represents low volatility and z1 represents high volatility
+    ## The vol of vol penalty will go from 1 to p_min where 1 represents no penalty
+    z0, z1 = 0.5, 1.5                # z_vov below 0.5 → no penalty; above 1.5 → max raw penalty
+    p_min = vol_of_vol_p_min         # even at max raw penalty, keep at least 60% exposure
+
+    ## Compute a 0..1 raw penalty that rises from 0→1 as z_vov goes z0→z1
+    df[f'{ticker}_vol_of_vol_signal_raw'] = (df[f'{ticker}_vol_of_vol_robust_z_score'] - z0) / max((z1 - z0), eps)
+
+    ## Clip the signal to [0, 1]
+    df[f'{ticker}_vol_of_vol_signal_raw'] = df[f'{ticker}_vol_of_vol_signal_raw'].clip(0, 1)
+
+    ## Invert so that the raw penalty goes from 1 to 0 instead of 0 to 1
+    df[f'{ticker}_vol_of_vol_penalty'] = 1 - df[f'{ticker}_vol_of_vol_signal_raw']
+
+    ## Floor the penalty at p_min
+    df[f'{ticker}_vol_of_vol_penalty'] = df[f'{ticker}_vol_of_vol_penalty'].clip(lower=p_min, upper=1)
+
+    return df
+
+
 def generate_trend_signal_with_donchian_channel(start_date, end_date, ticker, fast_mavg, slow_mavg, mavg_stepsize,
                                                 moving_avg_type='exponential', price_or_returns_calc='price',
                                                 rolling_donchian_window=20, long_only=False, use_coinbase_data=True):
@@ -619,4 +853,793 @@ def get_trend_donchian_signal_for_portfolio(start_date, end_date, ticker_list, f
     df_trend = pd.concat(trend_list, axis=1)
 
     return df_trend
+
+
+## Original Signal
+def generate_trend_signal_with_donchian_channel_continuous(start_date, end_date, ticker, fast_mavg, slow_mavg,
+                                                           mavg_stepsize, mavg_z_score_window,
+                                                           entry_rolling_donchian_window,
+                                                           exit_rolling_donchian_window, use_donchian_exit_gate,
+                                                           ma_crossover_signal_weight, donchian_signal_weight,
+                                                           weighted_signal_ewm_window,
+                                                           use_activation=True, tanh_activation_constant_dict=None,
+                                                           moving_avg_type='exponential', price_or_returns_calc='price',
+                                                           long_only=False, use_coinbase_data=True,
+                                                           use_saved_files=True, saved_file_end_date='2025-07-31'):
+    # Pull Close Prices from Coinbase
+    date_list = cn.coinbase_start_date_by_ticker_dict
+    if use_saved_files:
+        file_end_date = pd.Timestamp(saved_file_end_date).date()
+        filename = f"{ticker}-pickle-{pd.Timestamp(date_list[ticker]).strftime('%Y-%m-%d')}-{file_end_date.strftime('%Y-%m-%d')}"
+        output_file = f'coinbase_historical_price_folder/{filename}'
+        df = pd.read_pickle(output_file)
+        df = (df[['close', 'open']].rename(columns={'close': f'{ticker}_close', 'open': f'{ticker}_open'}))
+        date_cond = (df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)
+        df = df[date_cond]
+    else:
+        df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
+                                                            end_date=end_date, save_to_file=False)
+        df = (df[['close', 'open']].rename(columns={'close': f'{ticker}_close', 'open': f'{ticker}_open'}))
+        date_cond = (df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)
+        df = df[date_cond]
+
+    # Create Column Names
+    donchian_binary_signal_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_binary_signal'
+    donchian_continuous_signal_col = f'{ticker}_donchian_continuous_signal'
+    donchian_continuous_signal_rank_col = f'{ticker}_donchian_continuous_signal_rank'
+    trend_binary_signal_col = f'{ticker}_trend_signal'
+    trend_continuous_signal_col = f'{ticker}_mavg_ribbon_slope'
+    trend_continuous_signal_rank_col = f'{ticker}_mavg_ribbon_rank'
+    final_binary_signal_col = f'{ticker}_final_binary_signal'
+    final_weighted_additive_signal_col = f'{ticker}_final_weighted_additive_signal'
+    final_signal_col = f'{ticker}_final_signal'
+
+    ## Generate Trend Signal in Log Space
+    df_trend = create_trend_strategy_log_space(df, ticker, mavg_start=fast_mavg, mavg_end=slow_mavg,
+                                               mavg_stepsize=mavg_stepsize, mavg_z_score_window=mavg_z_score_window)
+
+    ## Generate Donchian Channels
+    # Donchian Buy signal: Price crosses above upper band
+    # Donchian Sell signal: Price crosses below lower band
+    df_donchian = calculate_donchian_channel_dual_window(start_date=start_date, end_date=end_date, ticker=ticker,
+                                                         price_or_returns_calc=price_or_returns_calc,
+                                                         entry_rolling_donchian_window=entry_rolling_donchian_window,
+                                                         exit_rolling_donchian_window=exit_rolling_donchian_window,
+                                                         use_coinbase_data=use_coinbase_data,
+                                                         use_saved_files=use_saved_files,
+                                                         saved_file_end_date=saved_file_end_date)
+
+    t_1_close_col = f't_1_close'
+    df_donchian[t_1_close_col] = df_donchian[f'close'].shift(1)
+    donchian_entry_upper_band_col = f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_upper_band_{price_or_returns_calc}'
+    donchian_entry_lower_band_col = f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_lower_band_{price_or_returns_calc}'
+    donchian_entry_middle_band_col = f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_middle_band_{price_or_returns_calc}'
+    donchian_exit_upper_band_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_upper_band_{price_or_returns_calc}'
+    donchian_exit_lower_band_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_lower_band_{price_or_returns_calc}'
+    donchian_exit_middle_band_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_middle_band_{price_or_returns_calc}'
+    shift_cols = [donchian_entry_upper_band_col, donchian_entry_lower_band_col, donchian_entry_middle_band_col,
+                  donchian_exit_upper_band_col, donchian_exit_lower_band_col, donchian_exit_middle_band_col]
+    for col in shift_cols:
+        df_donchian[f'{col}_t_2'] = df_donchian[col].shift(1)
+
+    # Donchian Continuous Signal
+    df_donchian[donchian_continuous_signal_col] = (
+                (df_donchian[t_1_close_col] - df_donchian[f'{donchian_entry_middle_band_col}_t_2']) /
+                (df_donchian[f'{donchian_entry_upper_band_col}_t_2'] - df_donchian[
+                    f'{donchian_entry_lower_band_col}_t_2']))
+
+    ## Calculate Donchian Channel Rank
+    ## Adjust the percentage ranks by 0.5 as without, the ranks go from 0 to 1. Recentering the function by giving it a steeper
+    ## slope near the origin takes into account even little information
+    df_donchian[donchian_continuous_signal_rank_col] = pct_rank(df_donchian[donchian_continuous_signal_col]) - 0.5
+
+    # Donchian Binary Signal
+    gate_long_condition = df_donchian[t_1_close_col] >= df_donchian[f'{donchian_exit_lower_band_col}_t_2']
+    gate_short_condition = df_donchian[t_1_close_col] <= df_donchian[f'{donchian_exit_upper_band_col}_t_2']
+    # sign of *entry* score decides direction
+    entry_sign = np.sign(df_donchian[donchian_continuous_signal_col])
+    # treat exact zero as "flat but allowed" (gate=1) so ranking not wiped out
+    entry_sign = np.where(entry_sign == 0, 1, entry_sign)  # default to long-side keep
+    df_donchian[donchian_binary_signal_col] = np.where(
+        entry_sign > 0, gate_long_condition, gate_short_condition).astype(float)
+
+    # Merging the Trend and Donchian Dataframes
+    donchian_cols = [f'{donchian_entry_upper_band_col}_t_2', f'{donchian_entry_lower_band_col}_t_2',
+                     f'{donchian_entry_middle_band_col}_t_2',
+                     f'{donchian_exit_upper_band_col}_t_2', f'{donchian_exit_lower_band_col}_t_2',
+                     f'{donchian_exit_middle_band_col}_t_2',
+                     donchian_binary_signal_col, donchian_continuous_signal_col, donchian_continuous_signal_rank_col]
+    df_trend = pd.merge(df_trend, df_donchian[donchian_cols], left_index=True, right_index=True, how='left')
+
+    ## Trend and Donchian Channel Signal
+    # Calculate the exponential weighted average of the ranked signals to remove short-term flip-flops (whiplash)
+    df_trend[[trend_continuous_signal_rank_col, donchian_continuous_signal_rank_col]] = (
+        df_trend[[trend_continuous_signal_rank_col, donchian_continuous_signal_rank_col]].ewm(
+            span=weighted_signal_ewm_window, adjust=False).mean())
+
+    # Weighted Sum of Rank Columns
+    df_trend[final_weighted_additive_signal_col] = (
+                ma_crossover_signal_weight * df_trend[trend_continuous_signal_rank_col] +
+                donchian_signal_weight * df_trend[donchian_continuous_signal_rank_col])
+
+    # Activation Scaled Signal
+    if use_activation:
+        final_signal_unscaled_95th_percentile = np.abs(df_trend[final_weighted_additive_signal_col]).quantile(0.95)
+        if tanh_activation_constant_dict:
+            k = tanh_activation_constant_dict[ticker]
+            df_trend[f'{ticker}_activation'] = np.tanh(df_trend[final_weighted_additive_signal_col] * k)
+        else:
+            if (final_signal_unscaled_95th_percentile == 0):  # | (final_signal_unscaled_95th_percentile.isnan()):
+                k = 1.0
+            else:
+                k = np.arctanh(0.9) / final_signal_unscaled_95th_percentile
+            df_trend[f'{ticker}_activation'] = np.tanh(df_trend[final_weighted_additive_signal_col] * k)
+    else:
+        df_trend[f'{ticker}_activation'] = df_trend[final_weighted_additive_signal_col]
+
+    # Apply Binary Gate
+    if use_donchian_exit_gate:
+        df_trend[f'{ticker}_activation'] = df_trend[f'{ticker}_activation'] * df_trend[donchian_binary_signal_col]
+
+    ## Long-Only Filter
+    df_trend[final_signal_col] = np.where(long_only, np.maximum(0, df_trend[f'{ticker}_activation']),
+                                          df_trend[f'{ticker}_activation'])
+
+    return df_trend
+
+
+def get_trend_donchian_signal_for_portfolio_continuous(
+        start_date, end_date, ticker_list, fast_mavg, slow_mavg, mavg_stepsize,
+        mavg_z_score_window, entry_rolling_donchian_window,
+        exit_rolling_donchian_window, use_donchian_exit_gate,
+        ma_crossover_signal_weight, donchian_signal_weight,
+        weighted_signal_ewm_window,
+        use_activation=True, tanh_activation_constant_dict=None,
+        moving_avg_type='exponential', long_only=False,
+        price_or_returns_calc='price',
+        use_coinbase_data=True, use_saved_files=True,
+        saved_file_end_date='2025-07-31'):
+
+    ## Generate trend signal for all tickers
+    trend_list = []
+    date_list = cn.coinbase_start_date_by_ticker_dict
+
+    for ticker in ticker_list:
+        # Create Column Names
+        donchian_continuous_signal_col = f'{ticker}_donchian_continuous_signal'
+        donchian_continuous_signal_rank_col = f'{ticker}_donchian_continuous_signal_rank'
+        trend_continuous_signal_col = f'{ticker}_mavg_ribbon_slope'
+        trend_continuous_signal_rank_col = f'{ticker}_mavg_ribbon_rank'
+        final_signal_col = f'{ticker}_final_signal'
+        close_price_col = f'{ticker}_close'
+        open_price_col = f'{ticker}_open'
+        final_weighted_additive_signal_col = f'{ticker}_final_weighted_additive_signal'
+
+        if pd.to_datetime(date_list[ticker]).date() > start_date:
+            run_date = pd.to_datetime(date_list[ticker]).date()
+        else:
+            run_date = start_date
+
+        df_trend = generate_trend_signal_with_donchian_channel_continuous(
+            start_date=run_date, end_date=end_date, ticker=ticker,
+            fast_mavg=fast_mavg, slow_mavg=slow_mavg, mavg_stepsize=mavg_stepsize,
+            mavg_z_score_window=mavg_z_score_window,
+            entry_rolling_donchian_window=entry_rolling_donchian_window,
+            exit_rolling_donchian_window=exit_rolling_donchian_window, use_donchian_exit_gate=use_donchian_exit_gate,
+            ma_crossover_signal_weight=ma_crossover_signal_weight, donchian_signal_weight=donchian_signal_weight,
+            weighted_signal_ewm_window=weighted_signal_ewm_window,
+            use_activation=use_activation, tanh_activation_constant_dict=tanh_activation_constant_dict,
+            moving_avg_type=moving_avg_type, price_or_returns_calc=price_or_returns_calc, long_only=long_only,
+            use_coinbase_data=use_coinbase_data, use_saved_files=use_saved_files,
+            saved_file_end_date=saved_file_end_date)
+
+        trend_cols = [close_price_col, open_price_col, trend_continuous_signal_col, trend_continuous_signal_rank_col,
+                      final_weighted_additive_signal_col, final_signal_col]
+        df_trend = df_trend[trend_cols]
+        trend_list.append(df_trend)
+
+    df_trend = pd.concat(trend_list, axis=1)
+
+    return df_trend
+
+
+def apply_target_volatility_position_sizing_continuous_strategy(
+        start_date, end_date, ticker_list, fast_mavg, slow_mavg, mavg_stepsize, mavg_z_score_window,
+        entry_rolling_donchian_window, exit_rolling_donchian_window, use_donchian_exit_gate,
+        ma_crossover_signal_weight, donchian_signal_weight, weighted_signal_ewm_window=4,
+        use_activation=True, tanh_activation_constant_dict=None, moving_avg_type='exponential',
+        long_only=False, price_or_returns_calc='price', initial_capital=15000, rolling_cov_window=20,
+        volatility_window=20, rolling_atr_window=20, atr_multiplier=0.5,
+        transaction_cost_est=0.001, passive_trade_rate=0.05, notional_threshold_pct=0.05, cooldown_counter_threshold=3,
+        use_coinbase_data=True, use_saved_files=True,
+        saved_file_end_date='2025-07-31', rolling_sharpe_window=50, cash_buffer_percentage=0.10,
+        annualized_target_volatility=0.20, annual_trading_days=365, use_specific_start_date=False,
+        signal_start_date=None):
+
+    ## Check if data is available for all the tickers
+    date_list = cn.coinbase_start_date_by_ticker_dict
+    ticker_list = [ticker for ticker in ticker_list if pd.Timestamp(date_list[ticker]).date() < end_date]
+
+    print('Generating Moving Average Ribbon Signal!!')
+    ## Generate Trend Signal for all tickers
+    df_trend = get_trend_donchian_signal_for_portfolio_continuous(
+        start_date=start_date, end_date=end_date, ticker_list=ticker_list, fast_mavg=fast_mavg, slow_mavg=slow_mavg,
+        mavg_stepsize=mavg_stepsize, mavg_z_score_window=mavg_z_score_window,
+        entry_rolling_donchian_window=entry_rolling_donchian_window,
+        exit_rolling_donchian_window=exit_rolling_donchian_window,  use_donchian_exit_gate=use_donchian_exit_gate,
+        ma_crossover_signal_weight=ma_crossover_signal_weight, donchian_signal_weight=donchian_signal_weight,
+        weighted_signal_ewm_window=weighted_signal_ewm_window, use_activation=use_activation,
+        tanh_activation_constant_dict=tanh_activation_constant_dict, moving_avg_type=moving_avg_type,
+        long_only=long_only, price_or_returns_calc=price_or_returns_calc, use_coinbase_data=use_coinbase_data,
+        use_saved_files=use_saved_files, saved_file_end_date=saved_file_end_date)
+
+    print('Generating Volatility Adjusted Trend Signal!!')
+    ## Get Volatility Adjusted Trend Signal
+    df_signal = size_cont.get_volatility_adjusted_trend_signal_continuous(df_trend, ticker_list, volatility_window,
+                                                                          annual_trading_days)
+
+    print('Getting Average True Range for Stop Loss Calculation!!')
+    ## Get Average True Range for Stop Loss Calculation
+    df_atr = size_cont.get_average_true_range_portfolio(start_date=start_date, end_date=end_date,
+                                                        ticker_list=ticker_list, rolling_atr_window=rolling_atr_window,
+                                                        price_or_returns_calc='price',
+                                                        use_coinbase_data=use_coinbase_data,
+                                                        use_saved_files=use_saved_files,
+                                                        saved_file_end_date=saved_file_end_date)
+    df_signal = pd.merge(df_signal, df_atr, left_index=True, right_index=True, how='left')
+
+    print('Calculating Volatility Targeted Position Size and Cash Management!!')
+    ## Get Target Volatility Position Sizing and Run Cash Management
+    df = size_cont.get_target_volatility_daily_portfolio_positions(
+        df_signal, ticker_list=ticker_list, initial_capital=initial_capital, rolling_cov_window=rolling_cov_window,
+        rolling_atr_window=rolling_atr_window, atr_multiplier=atr_multiplier,
+        cash_buffer_percentage=cash_buffer_percentage, annualized_target_volatility=annualized_target_volatility,
+        transaction_cost_est=transaction_cost_est, passive_trade_rate=passive_trade_rate,
+        notional_threshold_pct=notional_threshold_pct, cooldown_counter_threshold=cooldown_counter_threshold,
+        annual_trading_days=annual_trading_days, use_specific_start_date=use_specific_start_date,
+        signal_start_date=signal_start_date)
+
+    print('Calculating Portfolio Performance!!')
+    ## Calculate Portfolio Performance
+    df = size_bin.calculate_portfolio_returns(df, rolling_sharpe_window)
+
+    return df
+
+
+## Original Signal
+def generate_trend_signal_with_donchian_channel_continuous_with_rolling_r_sqr(
+        start_date, end_date, ticker, fast_mavg, slow_mavg, mavg_stepsize, mavg_z_score_window,
+        entry_rolling_donchian_window, exit_rolling_donchian_window, use_donchian_exit_gate,
+        ma_crossover_signal_weight, donchian_signal_weight, weighted_signal_ewm_window,
+        rolling_r2_window=30, lower_r_sqr_limit=0.2, upper_r_sqr_limit=0.8, r2_smooth_window=3, r2_confirm_days=0,
+        use_activation=True, tanh_activation_constant_dict=None, moving_avg_type='exponential',
+        price_or_returns_calc='price', long_only=False, use_coinbase_data=True, use_saved_files=True,
+        saved_file_end_date='2025-07-31'):
+
+    # Pull Close Prices from Coinbase
+    date_list = cn.coinbase_start_date_by_ticker_dict
+    if use_saved_files:
+        file_end_date = pd.Timestamp(saved_file_end_date).date()
+        filename = f"{ticker}-pickle-{pd.Timestamp(date_list[ticker]).strftime('%Y-%m-%d')}-{file_end_date.strftime('%Y-%m-%d')}"
+        output_file = f'coinbase_historical_price_folder/{filename}'
+        df = pd.read_pickle(output_file)
+        df = (df[['close', 'open']].rename(columns={'close': f'{ticker}_close', 'open': f'{ticker}_open'}))
+        date_cond = (df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)
+        df = df[date_cond]
+    else:
+        df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
+                                                            end_date=end_date, save_to_file=False)
+        df = (df[['close', 'open']].rename(columns={'close': f'{ticker}_close', 'open': f'{ticker}_open'}))
+        date_cond = (df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)
+        df = df[date_cond]
+
+    # Create Column Names
+    donchian_binary_signal_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_binary_signal'
+    donchian_continuous_signal_col = f'{ticker}_donchian_continuous_signal'
+    donchian_continuous_signal_rank_col = f'{ticker}_donchian_continuous_signal_rank'
+    trend_binary_signal_col = f'{ticker}_trend_signal'
+    trend_continuous_signal_col = f'{ticker}_mavg_ribbon_slope'
+    trend_continuous_signal_rank_col = f'{ticker}_mavg_ribbon_rank'
+    final_binary_signal_col = f'{ticker}_final_binary_signal'
+    final_weighted_additive_signal_col = f'{ticker}_final_weighted_additive_signal'
+    final_signal_col = f'{ticker}_final_signal'
+
+    ## Generate Trend Signal in Log Space
+    df_trend = create_trend_strategy_log_space(df, ticker, mavg_start=fast_mavg, mavg_end=slow_mavg,
+                                               mavg_stepsize=mavg_stepsize, mavg_z_score_window=mavg_z_score_window)
+
+    ## Generate Donchian Channels
+    # Donchian Buy signal: Price crosses above upper band
+    # Donchian Sell signal: Price crosses below lower band
+    df_donchian = calculate_donchian_channel_dual_window(start_date=start_date, end_date=end_date, ticker=ticker,
+                                                         price_or_returns_calc=price_or_returns_calc,
+                                                         entry_rolling_donchian_window=entry_rolling_donchian_window,
+                                                         exit_rolling_donchian_window=exit_rolling_donchian_window,
+                                                         use_coinbase_data=use_coinbase_data,
+                                                         use_saved_files=use_saved_files,
+                                                         saved_file_end_date=saved_file_end_date)
+
+    t_1_close_col = f't_1_close'
+    df_donchian[t_1_close_col] = df_donchian[f'close'].shift(1)
+    donchian_entry_upper_band_col = f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_upper_band_{price_or_returns_calc}'
+    donchian_entry_lower_band_col = f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_lower_band_{price_or_returns_calc}'
+    donchian_entry_middle_band_col = f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_middle_band_{price_or_returns_calc}'
+    donchian_exit_upper_band_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_upper_band_{price_or_returns_calc}'
+    donchian_exit_lower_band_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_lower_band_{price_or_returns_calc}'
+    donchian_exit_middle_band_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_middle_band_{price_or_returns_calc}'
+    shift_cols = [donchian_entry_upper_band_col, donchian_entry_lower_band_col, donchian_entry_middle_band_col,
+                  donchian_exit_upper_band_col, donchian_exit_lower_band_col, donchian_exit_middle_band_col]
+    for col in shift_cols:
+        df_donchian[f'{col}_t_2'] = df_donchian[col].shift(1)
+
+    # Donchian Continuous Signal
+    df_donchian[donchian_continuous_signal_col] = (
+                (df_donchian[t_1_close_col] - df_donchian[f'{donchian_entry_middle_band_col}_t_2']) /
+                (df_donchian[f'{donchian_entry_upper_band_col}_t_2'] - df_donchian[
+                    f'{donchian_entry_lower_band_col}_t_2']))
+
+    ## Calculate Donchian Channel Rank
+    ## Adjust the percentage ranks by 0.5 as without, the ranks go from 0 to 1. Recentering the function
+    ## by giving it a steeper slope near the origin takes into account even little information
+    df_donchian[donchian_continuous_signal_rank_col] = pct_rank(df_donchian[donchian_continuous_signal_col]) - 0.5
+
+    # Donchian Binary Signal
+    gate_long_condition = df_donchian[t_1_close_col] >= df_donchian[f'{donchian_exit_lower_band_col}_t_2']
+    gate_short_condition = df_donchian[t_1_close_col] <= df_donchian[f'{donchian_exit_upper_band_col}_t_2']
+    # sign of *entry* score decides direction
+    entry_sign = np.sign(df_donchian[donchian_continuous_signal_col])
+    # treat exact zero as "flat but allowed" (gate=1) so ranking not wiped out
+    entry_sign = np.where(entry_sign == 0, 1, entry_sign)  # default to long-side keep
+    df_donchian[donchian_binary_signal_col] = np.where(
+        entry_sign > 0, gate_long_condition, gate_short_condition).astype(float)
+
+    # Merging the Trend and Donchian Dataframes
+    donchian_cols = [t_1_close_col, f'{donchian_entry_upper_band_col}_t_2', f'{donchian_entry_lower_band_col}_t_2',
+                     f'{donchian_entry_middle_band_col}_t_2',
+                     f'{donchian_exit_upper_band_col}_t_2', f'{donchian_exit_lower_band_col}_t_2',
+                     f'{donchian_exit_middle_band_col}_t_2',
+                     donchian_binary_signal_col, donchian_continuous_signal_col, donchian_continuous_signal_rank_col]
+    df_trend = pd.merge(df_trend, df_donchian[donchian_cols], left_index=True, right_index=True, how='left')
+
+    ## Trend and Donchian Channel Signal
+    # Calculate the exponential weighted average of the ranked signals to remove short-term flip flops (whiplash)
+    df_trend[[trend_continuous_signal_rank_col, donchian_continuous_signal_rank_col]] = (
+        df_trend[[trend_continuous_signal_rank_col, donchian_continuous_signal_rank_col]].ewm(
+            span=weighted_signal_ewm_window, adjust=False).mean())
+
+    # Weighted Sum of Rank Columns
+    df_trend[final_weighted_additive_signal_col] = (
+                ma_crossover_signal_weight * df_trend[trend_continuous_signal_rank_col] +
+                donchian_signal_weight * df_trend[donchian_continuous_signal_rank_col])
+
+    # Apply Binary Gate
+    if use_donchian_exit_gate:
+        df_trend[final_weighted_additive_signal_col] = df_trend[final_weighted_additive_signal_col] * df_trend[
+            donchian_binary_signal_col]
+
+    ## Calculate Rolling R Squared Signal
+    df_trend = calculate_rolling_r2(df_trend, ticker=ticker, t_1_close_price_col=t_1_close_col,
+                                    rolling_r2_window=rolling_r2_window,
+                                    lower_r_sqr_limit=lower_r_sqr_limit, upper_r_sqr_limit=upper_r_sqr_limit,
+                                    r2_smooth_window=r2_smooth_window)
+
+    ## Apply Regime Filters
+    # Introduce a 3-day confirmation period for Rolling R Squared Signal
+    if r2_confirm_days >= 1:
+        df_trend[f'{ticker}_r2_enable'] = ((df_trend[f'{ticker}_rolling_r_sqr'] > 0.5)
+                                           .rolling(r2_confirm_days, min_periods=r2_confirm_days).min().fillna(
+            0.0).astype(float))
+        df_trend[final_signal_col] = df_trend[final_weighted_additive_signal_col] * df_trend[
+            f'{ticker}_rolling_r_sqr'] * df_trend[f'{ticker}_r2_enable']
+    else:
+        df_trend[final_signal_col] = df_trend[final_weighted_additive_signal_col] * df_trend[f'{ticker}_rolling_r_sqr']
+
+    ## Long-Only Filter
+    df_trend[final_signal_col] = np.where(long_only, np.maximum(0, df_trend[final_signal_col]),
+                                          df_trend[final_signal_col])
+
+    return df_trend
+
+
+def get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr(
+        start_date, end_date, ticker_list, fast_mavg, slow_mavg, mavg_stepsize, mavg_z_score_window,
+        entry_rolling_donchian_window, exit_rolling_donchian_window, use_donchian_exit_gate,
+        ma_crossover_signal_weight, donchian_signal_weight, weighted_signal_ewm_window,
+        rolling_r2_window=30, lower_r_sqr_limit=0.2, upper_r_sqr_limit=0.8, r2_smooth_window=3, r2_confirm_days=0,
+        use_activation=True, tanh_activation_constant_dict=None, moving_avg_type='exponential', long_only=False,
+        price_or_returns_calc='price', use_coinbase_data=True, use_saved_files=True, saved_file_end_date='2025-07-31'):
+
+    ## Generate trend signal for all tickers
+    trend_list = []
+    date_list = cn.coinbase_start_date_by_ticker_dict
+
+    for ticker in ticker_list:
+        # Create Column Names
+        donchian_continuous_signal_col = f'{ticker}_donchian_continuous_signal'
+        donchian_continuous_signal_rank_col = f'{ticker}_donchian_continuous_signal_rank'
+        trend_continuous_signal_col = f'{ticker}_mavg_ribbon_slope'
+        trend_continuous_signal_rank_col = f'{ticker}_mavg_ribbon_rank'
+        final_signal_col = f'{ticker}_final_signal'
+        close_price_col = f'{ticker}_close'
+        open_price_col = f'{ticker}_open'
+        rolling_r2_col = f'{ticker}_rolling_r_sqr'
+        # rolling_r2_enable_col = f'{ticker}_r2_enable'
+        final_weighted_additive_signal_col = f'{ticker}_final_weighted_additive_signal'
+
+        if pd.to_datetime(date_list[ticker]).date() > start_date:
+            run_date = pd.to_datetime(date_list[ticker]).date()
+        else:
+            run_date = start_date
+
+        df_trend = generate_trend_signal_with_donchian_channel_continuous_with_rolling_r_sqr(
+            start_date=start_date, end_date=end_date, ticker=ticker, fast_mavg=fast_mavg, slow_mavg=slow_mavg,
+            mavg_stepsize=mavg_stepsize, mavg_z_score_window=mavg_z_score_window,
+            entry_rolling_donchian_window=entry_rolling_donchian_window,
+            exit_rolling_donchian_window=exit_rolling_donchian_window, use_donchian_exit_gate=use_donchian_exit_gate,
+            ma_crossover_signal_weight=ma_crossover_signal_weight, donchian_signal_weight=donchian_signal_weight,
+            weighted_signal_ewm_window=weighted_signal_ewm_window,
+            rolling_r2_window=rolling_r2_window, lower_r_sqr_limit=lower_r_sqr_limit,
+            upper_r_sqr_limit=upper_r_sqr_limit, r2_smooth_window=r2_smooth_window, r2_confirm_days=r2_confirm_days,
+            use_activation=use_activation, tanh_activation_constant_dict=tanh_activation_constant_dict,
+            moving_avg_type=moving_avg_type, price_or_returns_calc=price_or_returns_calc, long_only=long_only,
+            use_coinbase_data=use_coinbase_data, use_saved_files=use_saved_files,
+            saved_file_end_date=saved_file_end_date)
+
+        trend_cols = [close_price_col, open_price_col, trend_continuous_signal_col, trend_continuous_signal_rank_col,
+                      final_weighted_additive_signal_col,
+                      rolling_r2_col, final_signal_col]
+        df_trend = df_trend[trend_cols]
+        trend_list.append(df_trend)
+
+    df_trend = pd.concat(trend_list, axis=1)
+
+    return df_trend
+
+
+def apply_target_volatility_position_sizing_continuous_strategy_with_rolling_r_sqr(
+        start_date, end_date, ticker_list, fast_mavg, slow_mavg, mavg_stepsize, mavg_z_score_window,
+        entry_rolling_donchian_window, exit_rolling_donchian_window, use_donchian_exit_gate,
+        ma_crossover_signal_weight, donchian_signal_weight, weighted_signal_ewm_window=4,
+        rolling_r2_window=30, lower_r_sqr_limit=0.2, upper_r_sqr_limit=0.8, r2_smooth_window=3, r2_confirm_days=0,
+        use_activation=True, tanh_activation_constant_dict=None, moving_avg_type='exponential', long_only=False,
+        price_or_returns_calc='price', initial_capital=15000, rolling_cov_window=20, volatility_window=20,
+        rolling_atr_window=20, atr_multiplier=0.5, transaction_cost_est=0.001, passive_trade_rate=0.05,
+        notional_threshold_pct=0.05, cooldown_counter_threshold=3, use_coinbase_data=True, use_saved_files=True,
+        saved_file_end_date='2025-07-31', rolling_sharpe_window=50, cash_buffer_percentage=0.10,
+        annualized_target_volatility=0.20, annual_trading_days=365,
+        use_specific_start_date=False, signal_start_date=None):
+
+    ## Check if data is available for all the tickers
+    date_list = cn.coinbase_start_date_by_ticker_dict
+    ticker_list = [ticker for ticker in ticker_list if pd.Timestamp(date_list[ticker]).date() < end_date]
+
+    print('Generating Moving Average Ribbon Signal!!')
+    ## Generate Trend Signal for all tickers
+    df_trend = get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr(
+        start_date=start_date, end_date=end_date, ticker_list=ticker_list, fast_mavg=fast_mavg, slow_mavg=slow_mavg,
+        mavg_stepsize=mavg_stepsize, mavg_z_score_window=mavg_z_score_window,
+        entry_rolling_donchian_window=entry_rolling_donchian_window,
+        exit_rolling_donchian_window=exit_rolling_donchian_window, use_donchian_exit_gate=use_donchian_exit_gate,
+        ma_crossover_signal_weight=ma_crossover_signal_weight, donchian_signal_weight=donchian_signal_weight,
+        weighted_signal_ewm_window=weighted_signal_ewm_window, rolling_r2_window=rolling_r2_window,
+        lower_r_sqr_limit=lower_r_sqr_limit, upper_r_sqr_limit=upper_r_sqr_limit, r2_smooth_window=r2_smooth_window,
+        r2_confirm_days=r2_confirm_days, use_activation=use_activation,
+        tanh_activation_constant_dict=tanh_activation_constant_dict, moving_avg_type=moving_avg_type,
+        long_only=long_only, price_or_returns_calc=price_or_returns_calc, use_coinbase_data=use_coinbase_data,
+        use_saved_files=use_saved_files, saved_file_end_date=saved_file_end_date)
+
+    print('Generating Volatility Adjusted Trend Signal!!')
+    ## Get Volatility Adjusted Trend Signal
+    df_signal = size_cont.get_volatility_adjusted_trend_signal_continuous(df_trend, ticker_list, volatility_window,
+                                                                          annual_trading_days)
+
+    print('Getting Average True Range for Stop Loss Calculation!!')
+    ## Get Average True Range for Stop Loss Calculation
+    df_atr = size_cont.get_average_true_range_portfolio(start_date=start_date, end_date=end_date,
+                                                        ticker_list=ticker_list, rolling_atr_window=rolling_atr_window,
+                                                        price_or_returns_calc='price',
+                                                        use_coinbase_data=use_coinbase_data,
+                                                        use_saved_files=use_saved_files,
+                                                        saved_file_end_date=saved_file_end_date)
+    df_signal = pd.merge(df_signal, df_atr, left_index=True, right_index=True, how='left')
+
+    print('Calculating Volatility Targeted Position Size and Cash Management!!')
+    ## Get Target Volatility Position Sizing and Run Cash Management
+    df = size_cont.get_target_volatility_daily_portfolio_positions(df_signal, ticker_list=ticker_list,
+                                                                   initial_capital=initial_capital,
+                                                                   rolling_cov_window=rolling_cov_window,
+                                                                   rolling_atr_window=rolling_atr_window,
+                                                                   atr_multiplier=atr_multiplier,
+                                                                   cash_buffer_percentage=cash_buffer_percentage,
+                                                                   annualized_target_volatility=annualized_target_volatility,
+                                                                   transaction_cost_est=transaction_cost_est,
+                                                                   passive_trade_rate=passive_trade_rate,
+                                                                   notional_threshold_pct=notional_threshold_pct,
+                                                                   cooldown_counter_threshold=cooldown_counter_threshold,
+                                                                   annual_trading_days=annual_trading_days,
+                                                                   use_specific_start_date=use_specific_start_date,
+                                                                   signal_start_date=signal_start_date)
+
+    print('Calculating Portfolio Performance!!')
+    ## Calculate Portfolio Performance
+    df = size_bin.calculate_portfolio_returns(df, rolling_sharpe_window)
+
+    return df
+
+
+## Original Signal
+def generate_trend_signal_with_donchian_channel_continuous_with_rolling_r_sqr_vol_of_vol(
+        start_date, end_date, ticker, fast_mavg, slow_mavg, mavg_stepsize, mavg_z_score_window,
+        entry_rolling_donchian_window, exit_rolling_donchian_window, use_donchian_exit_gate,
+        ma_crossover_signal_weight, donchian_signal_weight, weighted_signal_ewm_window,
+        rolling_r2_window=30, lower_r_sqr_limit=0.2, upper_r_sqr_limit=0.8, r2_smooth_window=3, r2_confirm_days=0,
+        log_std_window=14, coef_of_variation_window=30, vol_of_vol_z_score_window=252, vol_of_vol_p_min=0.6,
+        r2_strong_threshold=0.8, use_activation=True, tanh_activation_constant_dict=None, moving_avg_type='exponential',
+        price_or_returns_calc='price', long_only=False, use_coinbase_data=True, use_saved_files=True,
+        saved_file_end_date='2025-07-31'):
+
+    # Pull Close Prices from Coinbase
+    date_list = cn.coinbase_start_date_by_ticker_dict
+    if use_saved_files:
+        file_end_date = pd.Timestamp(saved_file_end_date).date()
+        filename = f"{ticker}-pickle-{pd.Timestamp(date_list[ticker]).strftime('%Y-%m-%d')}-{file_end_date.strftime('%Y-%m-%d')}"
+        output_file = f'coinbase_historical_price_folder/{filename}'
+        df = pd.read_pickle(output_file)
+        df = (df[['close', 'open']].rename(columns={'close': f'{ticker}_close', 'open': f'{ticker}_open'}))
+        date_cond = (df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)
+        df = df[date_cond]
+    else:
+        df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
+                                                            end_date=end_date, save_to_file=False)
+        df = (df[['close', 'open']].rename(columns={'close': f'{ticker}_close', 'open': f'{ticker}_open'}))
+        date_cond = (df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)
+        df = df[date_cond]
+
+    # Create Column Names
+    donchian_binary_signal_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_binary_signal'
+    donchian_continuous_signal_col = f'{ticker}_donchian_continuous_signal'
+    donchian_continuous_signal_rank_col = f'{ticker}_donchian_continuous_signal_rank'
+    trend_binary_signal_col = f'{ticker}_trend_signal'
+    trend_continuous_signal_col = f'{ticker}_mavg_ribbon_slope'
+    trend_continuous_signal_rank_col = f'{ticker}_mavg_ribbon_rank'
+    final_binary_signal_col = f'{ticker}_final_binary_signal'
+    final_weighted_additive_signal_col = f'{ticker}_final_weighted_additive_signal'
+    final_signal_col = f'{ticker}_final_signal'
+
+    ## Generate Trend Signal in Log Space
+    df_trend = create_trend_strategy_log_space(df, ticker, mavg_start=fast_mavg, mavg_end=slow_mavg,
+                                               mavg_stepsize=mavg_stepsize, mavg_z_score_window=mavg_z_score_window)
+
+    ## Generate Donchian Channels
+    # Donchian Buy signal: Price crosses above upper band
+    # Donchian Sell signal: Price crosses below lower band
+    df_donchian = calculate_donchian_channel_dual_window(start_date=start_date, end_date=end_date, ticker=ticker,
+                                                         price_or_returns_calc=price_or_returns_calc,
+                                                         entry_rolling_donchian_window=entry_rolling_donchian_window,
+                                                         exit_rolling_donchian_window=exit_rolling_donchian_window,
+                                                         use_coinbase_data=use_coinbase_data,
+                                                         use_saved_files=use_saved_files,
+                                                         saved_file_end_date=saved_file_end_date)
+
+    t_1_close_col = f't_1_close'
+    df_donchian[t_1_close_col] = df_donchian[f'close'].shift(1)
+    donchian_entry_upper_band_col = f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_upper_band_{price_or_returns_calc}'
+    donchian_entry_lower_band_col = f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_lower_band_{price_or_returns_calc}'
+    donchian_entry_middle_band_col = f'{ticker}_{entry_rolling_donchian_window}_donchian_entry_middle_band_{price_or_returns_calc}'
+    donchian_exit_upper_band_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_upper_band_{price_or_returns_calc}'
+    donchian_exit_lower_band_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_lower_band_{price_or_returns_calc}'
+    donchian_exit_middle_band_col = f'{ticker}_{exit_rolling_donchian_window}_donchian_exit_middle_band_{price_or_returns_calc}'
+    shift_cols = [donchian_entry_upper_band_col, donchian_entry_lower_band_col, donchian_entry_middle_band_col,
+                  donchian_exit_upper_band_col, donchian_exit_lower_band_col, donchian_exit_middle_band_col]
+    for col in shift_cols:
+        df_donchian[f'{col}_t_2'] = df_donchian[col].shift(1)
+
+    # Donchian Continuous Signal
+    df_donchian[donchian_continuous_signal_col] = (
+                (df_donchian[t_1_close_col] - df_donchian[f'{donchian_entry_middle_band_col}_t_2']) /
+                (df_donchian[f'{donchian_entry_upper_band_col}_t_2'] - df_donchian[
+                    f'{donchian_entry_lower_band_col}_t_2']))
+
+    ## Calculate Donchian Channel Rank
+    ## Adjust the percentage ranks by 0.5 as without, the ranks go from 0 to 1. Recentering the function by giving it a steeper
+    ## slope near the origin takes into account even little information
+    df_donchian[donchian_continuous_signal_rank_col] = pct_rank(df_donchian[donchian_continuous_signal_col]) - 0.5
+
+    # Donchian Binary Signal
+    gate_long_condition = df_donchian[t_1_close_col] >= df_donchian[f'{donchian_exit_lower_band_col}_t_2']
+    gate_short_condition = df_donchian[t_1_close_col] <= df_donchian[f'{donchian_exit_upper_band_col}_t_2']
+    # sign of *entry* score decides direction
+    entry_sign = np.sign(df_donchian[donchian_continuous_signal_col])
+    # treat exact zero as "flat but allowed" (gate=1) so ranking not wiped out
+    entry_sign = np.where(entry_sign == 0, 1, entry_sign)  # default to long-side keep
+    df_donchian[donchian_binary_signal_col] = np.where(
+        entry_sign > 0, gate_long_condition, gate_short_condition).astype(float)
+
+    # Merging the Trend and Donchian Dataframes
+    donchian_cols = [t_1_close_col, f'{donchian_entry_upper_band_col}_t_2', f'{donchian_entry_lower_band_col}_t_2',
+                     f'{donchian_entry_middle_band_col}_t_2',
+                     f'{donchian_exit_upper_band_col}_t_2', f'{donchian_exit_lower_band_col}_t_2',
+                     f'{donchian_exit_middle_band_col}_t_2',
+                     donchian_binary_signal_col, donchian_continuous_signal_col, donchian_continuous_signal_rank_col]
+    df_trend = pd.merge(df_trend, df_donchian[donchian_cols], left_index=True, right_index=True, how='left')
+
+    ## Trend and Donchian Channel Signal
+    # Calculate the exponential weighted average of the ranked signals to remove short-term flip-flops (whiplash)
+    df_trend[[trend_continuous_signal_rank_col, donchian_continuous_signal_rank_col]] = (
+        df_trend[[trend_continuous_signal_rank_col, donchian_continuous_signal_rank_col]].ewm(
+            span=weighted_signal_ewm_window, adjust=False).mean())
+
+    # Weighted Sum of Rank Columns
+    df_trend[final_weighted_additive_signal_col] = (
+                ma_crossover_signal_weight * df_trend[trend_continuous_signal_rank_col] +
+                donchian_signal_weight * df_trend[donchian_continuous_signal_rank_col])
+
+    # Apply Binary Gate
+    if use_donchian_exit_gate:
+        df_trend[final_weighted_additive_signal_col] = df_trend[final_weighted_additive_signal_col] * df_trend[
+            donchian_binary_signal_col]
+
+    ## Calculate Rolling R Squared Signal
+    df_trend = calculate_rolling_r2(df_trend, ticker=ticker, t_1_close_price_col=t_1_close_col,
+                                    rolling_r2_window=rolling_r2_window,
+                                    lower_r_sqr_limit=lower_r_sqr_limit, upper_r_sqr_limit=upper_r_sqr_limit,
+                                    r2_smooth_window=r2_smooth_window)
+
+    ## Calculate Vol of Vol Signal
+    df_trend = generate_vol_of_vol_signal_log_space(df_trend, ticker=ticker, t_1_close_price_col=t_1_close_col,
+                                                    log_std_window=log_std_window,
+                                                    coef_of_variation_window=coef_of_variation_window,
+                                                    vol_of_vol_z_score_window=vol_of_vol_z_score_window,
+                                                    vol_of_vol_p_min=vol_of_vol_p_min)
+
+    ## Apply Regime Filters
+    strong_rolling_r_sqr_cond = (df_trend[f'{ticker}_rolling_r_sqr'] >= r2_strong_threshold)
+    df_trend[f'{ticker}_regime_filter'] = (np.where(strong_rolling_r_sqr_cond, df_trend[f'{ticker}_rolling_r_sqr'],
+                                                    df_trend[f'{ticker}_rolling_r_sqr'] * df_trend[
+                                                        f'{ticker}_vol_of_vol_penalty']).astype(float))
+    df_trend[final_signal_col] = df_trend[final_weighted_additive_signal_col] * df_trend[f'{ticker}_regime_filter']
+
+    # Introduce a Confirmation period for Rolling R Squared Signal
+    if r2_confirm_days >= 1:
+        df_trend[f'{ticker}_r2_enable'] = ((df_trend[f'{ticker}_rolling_r_sqr'] > 0.5)
+                                           .rolling(r2_confirm_days, min_periods=r2_confirm_days).min().fillna(
+            0.0).astype(float))
+        df_trend[final_signal_col] = df_trend[final_signal_col] * df_trend[f'{ticker}_r2_enable']
+    else:
+        df_trend[final_signal_col] = df_trend[final_signal_col]
+
+    ## Long-Only Filter
+    df_trend[final_signal_col] = np.where(long_only, np.maximum(0, df_trend[final_signal_col]),
+                                          df_trend[final_signal_col])
+
+    return df_trend
+
+
+def get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr_vol_of_vol(
+        start_date, end_date, ticker_list, fast_mavg, slow_mavg, mavg_stepsize, mavg_z_score_window,
+        entry_rolling_donchian_window, exit_rolling_donchian_window, use_donchian_exit_gate,
+        ma_crossover_signal_weight, donchian_signal_weight, weighted_signal_ewm_window,
+        rolling_r2_window=30, lower_r_sqr_limit=0.2, upper_r_sqr_limit=0.8, r2_smooth_window=3, r2_confirm_days=0,
+        log_std_window=14, coef_of_variation_window=30, vol_of_vol_z_score_window=252, vol_of_vol_p_min=0.6,
+        r2_strong_threshold=0.8, use_activation=True, tanh_activation_constant_dict=None, moving_avg_type='exponential',
+        long_only=False, price_or_returns_calc='price', use_coinbase_data=True, use_saved_files=True,
+        saved_file_end_date='2025-07-31'):
+
+    ## Generate trend signal for all tickers
+    trend_list = []
+    date_list = cn.coinbase_start_date_by_ticker_dict
+
+    for ticker in ticker_list:
+        # Create Column Names
+        donchian_continuous_signal_col = f'{ticker}_donchian_continuous_signal'
+        donchian_continuous_signal_rank_col = f'{ticker}_donchian_continuous_signal_rank'
+        trend_continuous_signal_col = f'{ticker}_mavg_ribbon_slope'
+        trend_continuous_signal_rank_col = f'{ticker}_mavg_ribbon_rank'
+        final_signal_col = f'{ticker}_final_signal'
+        close_price_col = f'{ticker}_close'
+        open_price_col = f'{ticker}_open'
+        rolling_r2_col = f'{ticker}_rolling_r_sqr'
+        # rolling_r2_enable_col = f'{ticker}_r2_enable'
+        final_weighted_additive_signal_col = f'{ticker}_final_weighted_additive_signal'
+
+        if pd.to_datetime(date_list[ticker]).date() > start_date:
+            run_date = pd.to_datetime(date_list[ticker]).date()
+        else:
+            run_date = start_date
+
+        df_trend = generate_trend_signal_with_donchian_channel_continuous_with_rolling_r_sqr_vol_of_vol(
+            start_date=start_date, end_date=end_date, ticker=ticker, fast_mavg=fast_mavg, slow_mavg=slow_mavg,
+            mavg_stepsize=mavg_stepsize, mavg_z_score_window=mavg_z_score_window,
+            entry_rolling_donchian_window=entry_rolling_donchian_window,
+            exit_rolling_donchian_window=exit_rolling_donchian_window, use_donchian_exit_gate=use_donchian_exit_gate,
+            ma_crossover_signal_weight=ma_crossover_signal_weight, donchian_signal_weight=donchian_signal_weight,
+            weighted_signal_ewm_window=weighted_signal_ewm_window,
+            rolling_r2_window=rolling_r2_window, lower_r_sqr_limit=lower_r_sqr_limit,
+            upper_r_sqr_limit=upper_r_sqr_limit, r2_smooth_window=r2_smooth_window, r2_confirm_days=r2_confirm_days,
+            log_std_window=log_std_window, coef_of_variation_window=coef_of_variation_window,
+            vol_of_vol_z_score_window=vol_of_vol_z_score_window, vol_of_vol_p_min=vol_of_vol_p_min,
+            r2_strong_threshold=r2_strong_threshold,
+            use_activation=use_activation, tanh_activation_constant_dict=tanh_activation_constant_dict,
+            moving_avg_type=moving_avg_type, price_or_returns_calc=price_or_returns_calc, long_only=long_only,
+            use_coinbase_data=use_coinbase_data, use_saved_files=use_saved_files,
+            saved_file_end_date=saved_file_end_date)
+
+        trend_cols = [close_price_col, open_price_col, trend_continuous_signal_col, trend_continuous_signal_rank_col,
+                      final_weighted_additive_signal_col,
+                      rolling_r2_col, final_signal_col]
+        df_trend = df_trend[trend_cols]
+        trend_list.append(df_trend)
+
+    df_trend = pd.concat(trend_list, axis=1)
+
+    return df_trend
+
+
+def apply_target_volatility_position_sizing_continuous_strategy_with_rolling_r_sqr_vol_of_vol(
+        start_date, end_date, ticker_list, fast_mavg, slow_mavg, mavg_stepsize, mavg_z_score_window,
+        entry_rolling_donchian_window, exit_rolling_donchian_window, use_donchian_exit_gate,
+        ma_crossover_signal_weight, donchian_signal_weight, weighted_signal_ewm_window,
+        rolling_r2_window=30, lower_r_sqr_limit=0.2, upper_r_sqr_limit=0.8, r2_smooth_window=3, r2_confirm_days=0,
+        log_std_window=14, coef_of_variation_window=30, vol_of_vol_z_score_window=252, vol_of_vol_p_min=0.6,
+        r2_strong_threshold=0.8, use_activation=True, tanh_activation_constant_dict=None, moving_avg_type='exponential',
+        long_only=False, price_or_returns_calc='price', initial_capital=15000, rolling_cov_window=20,
+        volatility_window=20, rolling_atr_window=20, atr_multiplier=0.5, transaction_cost_est=0.001,
+        passive_trade_rate=0.05, notional_threshold_pct=0.05, cooldown_counter_threshold=3, use_coinbase_data=True,
+        use_saved_files=True, saved_file_end_date='2025-07-31', rolling_sharpe_window=50, cash_buffer_percentage=0.10,
+        annualized_target_volatility=0.20, annual_trading_days=365, use_specific_start_date=False,
+        signal_start_date=None):
+
+    ## Check if data is available for all the tickers
+    date_list = cn.coinbase_start_date_by_ticker_dict
+    ticker_list = [ticker for ticker in ticker_list if pd.Timestamp(date_list[ticker]).date() < end_date]
+
+    print('Generating Moving Average Ribbon Signal!!')
+    ## Generate Trend Signal for all tickers
+
+    df_trend = get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr_vol_of_vol(
+        start_date=start_date, end_date=end_date, ticker_list=ticker_list, fast_mavg=fast_mavg, slow_mavg=slow_mavg,
+        mavg_stepsize=mavg_stepsize, mavg_z_score_window=mavg_z_score_window,
+        entry_rolling_donchian_window=entry_rolling_donchian_window,
+        exit_rolling_donchian_window=exit_rolling_donchian_window, use_donchian_exit_gate=use_donchian_exit_gate,
+        ma_crossover_signal_weight=ma_crossover_signal_weight, donchian_signal_weight=donchian_signal_weight,
+        weighted_signal_ewm_window=weighted_signal_ewm_window, rolling_r2_window=rolling_r2_window,
+        lower_r_sqr_limit=lower_r_sqr_limit, upper_r_sqr_limit=upper_r_sqr_limit, r2_smooth_window=r2_smooth_window,
+        r2_confirm_days=r2_confirm_days, log_std_window=log_std_window, coef_of_variation_window=coef_of_variation_window,
+        vol_of_vol_z_score_window=vol_of_vol_z_score_window, vol_of_vol_p_min=vol_of_vol_p_min,
+        r2_strong_threshold=r2_strong_threshold, use_activation=use_activation,
+        tanh_activation_constant_dict=tanh_activation_constant_dict, moving_avg_type=moving_avg_type,
+        long_only=long_only, price_or_returns_calc=price_or_returns_calc, use_coinbase_data=use_coinbase_data,
+        use_saved_files=use_saved_files, saved_file_end_date=saved_file_end_date)
+
+    print('Generating Volatility Adjusted Trend Signal!!')
+    ## Get Volatility Adjusted Trend Signal
+    df_signal = size_cont.get_volatility_adjusted_trend_signal_continuous(df_trend, ticker_list, volatility_window,
+                                                                          annual_trading_days)
+
+    print('Getting Average True Range for Stop Loss Calculation!!')
+    ## Get Average True Range for Stop Loss Calculation
+    df_atr = size_cont.get_average_true_range_portfolio(start_date=start_date, end_date=end_date,
+                                                        ticker_list=ticker_list, rolling_atr_window=rolling_atr_window,
+                                                        price_or_returns_calc='price',
+                                                        use_coinbase_data=use_coinbase_data,
+                                                        use_saved_files=use_saved_files,
+                                                        saved_file_end_date=saved_file_end_date)
+    df_signal = pd.merge(df_signal, df_atr, left_index=True, right_index=True, how='left')
+
+    print('Calculating Volatility Targeted Position Size and Cash Management!!')
+    ## Get Target Volatility Position Sizing and Run Cash Management
+    df = size_cont.get_target_volatility_daily_portfolio_positions(
+        df_signal, ticker_list=ticker_list, initial_capital=initial_capital, rolling_cov_window=rolling_cov_window,
+        rolling_atr_window=rolling_atr_window, atr_multiplier=atr_multiplier,
+        cash_buffer_percentage=cash_buffer_percentage, annualized_target_volatility=annualized_target_volatility,
+        transaction_cost_est=transaction_cost_est, passive_trade_rate=passive_trade_rate,
+        notional_threshold_pct=notional_threshold_pct, cooldown_counter_threshold=cooldown_counter_threshold,
+        annual_trading_days=annual_trading_days, use_specific_start_date=use_specific_start_date,
+        signal_start_date=signal_start_date)
+
+    print('Calculating Portfolio Performance!!')
+    ## Calculate Portfolio Performance
+    df = size_bin.calculate_portfolio_returns(df, rolling_sharpe_window)
+
+    return df
 
