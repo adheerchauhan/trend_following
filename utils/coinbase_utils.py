@@ -49,13 +49,21 @@ def get_coinbase_rest_api_client(key_location):
     return client
 
 
-def get_portfolio_uuid(client):
-    portfolio_uuid = client.get_portfolios().portfolios[0]['uuid']
+def get_portfolio_uuid(client, portfolio_name='Default'):
+    portfolio_list = client.get_portfolios()['portfolios']
+    if portfolio_name == 'Default':
+        portfolio = next((p for p in portfolio_list
+                          if p['name'] == 'Trend Following' and not p['deleted']), None)
+    else:
+        portfolio = next((p for p in portfolio_list
+                          if p['name'] == 'Default' and not p['deleted']), None)
+
+    portfolio_uuid = portfolio['uuid']
     return portfolio_uuid
 
 
-def get_portfolio_breakdown(client):
-    portfolio_uuid = get_portfolio_uuid(client)
+def get_portfolio_breakdown(client, portfolio_uuid):
+    # portfolio_uuid = get_portfolio_uuid(client)
     portfolio_list = client.get_portfolio_breakdown(portfolio_uuid).breakdown.spot_positions
     portfolio_data = []
 
