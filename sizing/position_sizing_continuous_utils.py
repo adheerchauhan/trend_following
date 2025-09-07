@@ -490,7 +490,6 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, initial_cap
     daily_target_volatility = annualized_target_volatility / np.sqrt(annual_trading_days)
 
     ## Reorder dataframe columns
-    col_list = []
     for ticker in ticker_list:
         df[f'{ticker}_new_position_size'] = 0.0
         df[f'{ticker}_new_position_notional'] = 0.0
