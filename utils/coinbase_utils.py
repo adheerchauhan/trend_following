@@ -53,10 +53,10 @@ def get_portfolio_uuid(client, portfolio_name='Default'):
     portfolio_list = client.get_portfolios()['portfolios']
     if portfolio_name == 'Default':
         portfolio = next((p for p in portfolio_list
-                          if p['name'] == 'Trend Following' and not p['deleted']), None)
+                          if p['name'] == 'Default' and not p['deleted']), None)
     else:
         portfolio = next((p for p in portfolio_list
-                          if p['name'] == 'Default' and not p['deleted']), None)
+                          if p['name'] == 'Trend Following' and not p['deleted']), None)
 
     portfolio_uuid = portfolio['uuid']
     return portfolio_uuid
