@@ -7,8 +7,8 @@ import datetime
 import os
 from requests.exceptions import HTTPError
 
+## Coinbase API Documentation: https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/rest-api/introduction
 
-key_location = f'{os.environ.get('HOME')}/Documents/git/trend_following/cdp_api_key.json'
 coinbase_start_date_by_ticker_dict = {
     'BTC-USD': '2016-01-01',
     'ETH-USD': '2016-06-01',
@@ -44,7 +44,19 @@ coinbase_start_date_by_ticker_dict = {
     'HONEY-USD': '2024-01-01'
 }
 
-def get_coinbase_rest_api_client(key_location):
+
+def get_portfolio_key(portfolio_name):
+    key_location = ''
+    if portfolio_name == 'Default':
+        key_location = f'{os.environ.get('HOME')}/Documents/git/trend_following/exchange_config/cdp_api_key_default.json'
+    elif portfolio_name == 'Trend Following':
+        key_location = f'{os.environ.get('HOME')}/Documents/git/trend_following/exchange_config/cdp_api_key_trend_following.json'
+
+    return key_location
+
+
+def get_coinbase_rest_api_client(portfolio_name):
+    key_location = get_portfolio_key(portfolio_name)
     client = RESTClient(key_file=key_location)
     return client
 
@@ -170,7 +182,7 @@ def get_coinbase_daily_historical_price_data(client, ticker, start_timestamp, en
 def save_historical_crypto_prices_from_coinbase(ticker, user_start_date=False, start_date=None, end_date=None,
                                                 save_to_file=False):
 
-    client = get_coinbase_rest_api_client(key_location)
+    client = get_coinbase_rest_api_client(portfolio_name='Default')
     if user_start_date:
         start_date = pd.Timestamp(start_date)
     else:
@@ -206,7 +218,7 @@ def save_historical_crypto_prices_from_coinbase(ticker, user_start_date=False, s
 
 
 def get_coinbase_ohlc_data(ticker):
-    pickle_file_path = f"{os.environ.get('HOME')}/Documents/git/trend_following/coinbase_historical_price_folder/"
+    pickle_file_path = f"{os.environ.get('HOME')}/Documents/git/trend_following/data_folder/coinbase_historical_price_folder/"
     files = os.listdir(pickle_file_path)
     matching_files = [f for f in files if f.startswith(ticker)]
 

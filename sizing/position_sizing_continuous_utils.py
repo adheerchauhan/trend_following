@@ -68,13 +68,14 @@ def get_target_volatility_position_sizing(df, cov_matrix, date, ticker_list, dai
     scaled_weight_cols = [f'{ticker}_target_vol_normalized_weight' for ticker in ticker_list]
     target_notional_cols = [f'{ticker}_target_notional' for ticker in ticker_list]
     t_1_price_cols = [f'{ticker}_t_1_close' for ticker in ticker_list]
+    returns_cols = [f'{ticker}_t_1_close_pct_returns' for ticker in ticker_list]
 
     if date not in df.index or date not in cov_matrix.index:
         raise ValueError(f"Date {date} not found in DataFrame or covariance matrix index.")
 
     ## Iterate through each day and calculate the covariance matrix, portfolio volatility and scaling factors
     daily_weights = df.loc[date, unscaled_weight_cols].values
-    daily_cov_matrix = cov_matrix.loc[date].values
+    daily_cov_matrix = cov_matrix.loc[date].loc[returns_cols, returns_cols].values
     daily_portfolio_volatility = size_bin.calculate_portfolio_volatility(daily_weights, daily_cov_matrix)
     df.loc[date, 'daily_portfolio_volatility'] = daily_portfolio_volatility
     if daily_portfolio_volatility > 0:
@@ -110,7 +111,7 @@ def get_target_volatility_position_sizing(df, cov_matrix, date, ticker_list, dai
 
 
 def get_cash_adjusted_desired_positions(df, date, previous_date, ticker_list, cash_buffer_percentage,
-                                        transaction_cost_est, passive_trade_rate,
+                                        transaction_cost_est, passive_trade_rate, total_portfolio_value,
                                         notional_threshold_pct=0.10, min_trade_notional_abs=10):
     desired_positions = {}
     cash_debit = 0.0  # buys + fees
@@ -128,9 +129,10 @@ def get_cash_adjusted_desired_positions(df, date, previous_date, ticker_list, ca
         trade_fees = abs(new_trade_notional) * est_fees
 
         ## Calculate notional difference to determine if a trade is warranted
+        portfolio_equity_trade_threshold = notional_threshold_pct * total_portfolio_value
         notional_threshold = notional_threshold_pct * abs(target_notional)
         notional_floors_list = [
-            notional_threshold, min_trade_notional_abs
+            portfolio_equity_trade_threshold, notional_threshold, min_trade_notional_abs
         ]
         notional_floor = max(notional_floors_list)
         if abs(new_trade_notional) > notional_floor:
@@ -154,7 +156,7 @@ def get_cash_adjusted_desired_positions(df, date, previous_date, ticker_list, ca
     else:
         cash_shrink_factor = 1.0
 
-    df[f'cash_shrink_factor'] = cash_shrink_factor
+    df[f'cash_shrink_factor'].loc[date] = cash_shrink_factor
 
     return desired_positions, cash_shrink_factor
 
@@ -538,7 +540,8 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, initial_cap
         df['available_cash'].loc[date] = df['available_cash'].loc[previous_date]
 
         ## Roll Portfolio Value from the Previous Day
-        df['total_portfolio_value'].loc[date] = df['total_portfolio_value'].loc[previous_date]
+        total_portfolio_value = df['total_portfolio_value'].loc[previous_date]
+        df['total_portfolio_value'].loc[date] = total_portfolio_value
 
         ## Update Total Portfolio Value Upper Limit based on the Total Portfolio Value
         total_portfolio_value_upper_limit = (df['total_portfolio_value'].loc[date] *
@@ -552,7 +555,7 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, initial_cap
         ## Adjust Positions for Cash Available
         desired_positions, cash_shrink_factor = get_cash_adjusted_desired_positions(
             df, date, previous_date, ticker_list, cash_buffer_percentage, transaction_cost_est, passive_trade_rate,
-            notional_threshold_pct, min_trade_notional_abs)
+            total_portfolio_value, notional_threshold_pct, min_trade_notional_abs)
 
         ## Get the daily positions
         df = get_daily_positions_and_portfolio_cash(

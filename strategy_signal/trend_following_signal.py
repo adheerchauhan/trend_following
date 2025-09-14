@@ -1529,8 +1529,8 @@ def get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr_vol_of_vol(
 
     for ticker in ticker_list:
         # Create Column Names
-        donchian_continuous_signal_col = f'{ticker}_donchian_continuous_signal'
-        donchian_continuous_signal_rank_col = f'{ticker}_donchian_continuous_signal_rank'
+        # donchian_continuous_signal_col = f'{ticker}_donchian_continuous_signal'
+        # donchian_continuous_signal_rank_col = f'{ticker}_donchian_continuous_signal_rank'
         trend_continuous_signal_col = f'{ticker}_mavg_ribbon_slope'
         trend_continuous_signal_rank_col = f'{ticker}_mavg_ribbon_rank'
         final_signal_col = f'{ticker}_final_signal'
@@ -1546,7 +1546,7 @@ def get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr_vol_of_vol(
             run_date = start_date
 
         df_trend = generate_trend_signal_with_donchian_channel_continuous_with_rolling_r_sqr_vol_of_vol(
-            start_date=start_date, end_date=end_date, ticker=ticker, fast_mavg=fast_mavg, slow_mavg=slow_mavg,
+            start_date=run_date, end_date=end_date, ticker=ticker, fast_mavg=fast_mavg, slow_mavg=slow_mavg,
             mavg_stepsize=mavg_stepsize, mavg_z_score_window=mavg_z_score_window,
             entry_rolling_donchian_window=entry_rolling_donchian_window,
             exit_rolling_donchian_window=exit_rolling_donchian_window, use_donchian_exit_gate=use_donchian_exit_gate,
