@@ -68,6 +68,7 @@ risk_and_sizing:
   rolling_cov_window: 20
   rolling_atr_window: 20
   atr_multiplier: 2.5
+  highest_high_window: 56
   rolling_sharpe_window: 50
   cash_buffer_percentage: 0.10
 

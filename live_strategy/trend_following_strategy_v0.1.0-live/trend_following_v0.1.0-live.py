@@ -23,9 +23,6 @@ import datetime
 from datetime import datetime, timezone
 import itertools
 import ast
-import yfinance as yf
-import seaborn as sn
-from IPython.display import display, HTML
 from strategy_signal.trend_following_signal import (
     apply_jupyter_fullscreen_css, get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr_vol_of_vol
 )
