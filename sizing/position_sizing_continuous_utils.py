@@ -6,19 +6,24 @@ from sizing import position_sizing_binary_utils as size_bin
 from strategy_signal import trend_following_signal as tf
 
 
-def get_average_true_range_portfolio(start_date, end_date, ticker_list, rolling_atr_window=20,
+def get_average_true_range_portfolio(start_date, end_date, ticker_list, rolling_atr_window=20, highest_high_window=56,
                                      price_or_returns_calc='price', use_coinbase_data=True, use_saved_files=False,
                                      saved_file_end_date='2025-06-30'):
 
     atr_list = []
     for ticker in ticker_list:
-        atr_cols = [f'{ticker}_{rolling_atr_window}_avg_true_range_{price_or_returns_calc}']
+        atr_cols = [f'{ticker}_{rolling_atr_window}_avg_true_range_{price_or_returns_calc}',
+                    f'{ticker}_highest_high_{highest_high_window}', f'{ticker}_lowest_low_{highest_high_window}']
         df_atr = size_bin.calculate_average_true_range(start_date=start_date, end_date=end_date, ticker=ticker,
                                                        price_or_returns_calc=price_or_returns_calc,
                                                        rolling_atr_window=rolling_atr_window,
                                                        use_coinbase_data=use_coinbase_data,
                                                        use_saved_files=use_saved_files,
                                                        saved_file_end_date=saved_file_end_date)
+        df_atr[f'{ticker}_highest_high_{highest_high_window}'] = (df_atr[f'{ticker}_high'].rolling(highest_high_window)
+                                                                  .max().shift(1))
+        df_atr[f'{ticker}_lowest_low_{highest_high_window}'] = (df_atr[f'{ticker}_low'].rolling(highest_high_window)
+                                                                .min().shift(1))
         atr_list.append(df_atr[atr_cols])
 
     df_atr_concat = pd.concat(atr_list, axis=1)
@@ -162,8 +167,8 @@ def get_cash_adjusted_desired_positions(df, date, previous_date, ticker_list, ca
 
 
 def get_daily_positions_and_portfolio_cash(df, date, previous_date, desired_positions, cash_shrink_factor, ticker_list,
-                                           rolling_atr_window, atr_multiplier, transaction_cost_est,
-                                           passive_trade_rate, cooldown_counter_threshold):
+                                           stop_loss_strategy, rolling_atr_window, atr_multiplier, highest_high_window,
+                                           transaction_cost_est, passive_trade_rate, cooldown_counter_threshold):
     epsilon = 1e-6  # ignore micro-dust
 
     ## Define New, Add, Trim, No Change and Exit positions
@@ -192,8 +197,8 @@ def get_daily_positions_and_portfolio_cash(df, date, previous_date, desired_posi
 
         ## Assess New and Open Positions and update Stop Loss, Available Cash and Short Sale Proceeds
         df = update_new_and_open_positions(df, ticker, date, new_trade_notional, trade_fees,
-                                           rolling_atr_window,
-                                           atr_multiplier, transaction_cost_est, passive_trade_rate,
+                                           stop_loss_strategy, rolling_atr_window, atr_multiplier, highest_high_window,
+                                           transaction_cost_est, passive_trade_rate,
                                            cooldown_counter_threshold)
 
     ## Calculate End of Day Portfolio Positions
@@ -287,7 +292,8 @@ def handle_explicit_position_close(df, ticker, date, open_position_notional, ope
 
 
 def update_new_and_open_positions(df, ticker, date, new_trade_notional, trade_fees,
-                                  rolling_atr_window, atr_multiplier, transaction_cost_est, passive_trade_rate,
+                                  stop_loss_strategy, rolling_atr_window, atr_multiplier, highest_high_window,
+                                  transaction_cost_est, passive_trade_rate,
                                   cooldown_counter_threshold):
 
     new_position_notional_col = f'{ticker}_new_position_notional'
@@ -300,6 +306,8 @@ def update_new_and_open_positions(df, ticker, date, new_trade_notional, trade_fe
     target_position_notional_col = f'{ticker}_target_notional'
     target_position_size_col = f'{ticker}_target_size'
     stop_loss_col = f'{ticker}_stop_loss'
+    highest_high_col = f'{ticker}_highest_high_{highest_high_window}'
+    lowest_low_col = f'{ticker}_lowest_low_{highest_high_window}'
     cooldown_counter_col = f'{ticker}_cooldown_counter'
     stopout_flag_col = f'{ticker}_stopout_flag'
     available_cash_col = 'available_cash'
@@ -311,6 +319,7 @@ def update_new_and_open_positions(df, ticker, date, new_trade_notional, trade_fe
 
     ## Update Daily Positions
     # Open Trade Notional
+    previous_date = df.index[df.index.get_loc(date) - 1]
     open_position_size = df[open_position_size_col].loc[date]
     open_price = df[open_price_col].loc[date]
     open_position_notional = df[open_position_notional_col].loc[date]
@@ -348,14 +357,48 @@ def update_new_and_open_positions(df, ticker, date, new_trade_notional, trade_fe
         if closed:
             return df
 
-    # New Trade Notional
-    if new_trade_notional >= 0:
-        net_trade_notional = new_trade_notional - trade_fees
+    ## Capture ATR and Stop Loss Parameters
+    atr_t1 = df[atr_col].loc[date]
+
+    if stop_loss_strategy == 'Chandelier':
+        highest_high_t1 = df[highest_high_col].loc[date]
+        lowest_low_t1 = df[lowest_low_col].loc[date]
+        base_long_t1 = highest_high_t1 - atr_multiplier * atr_t1
+        base_short_t1 = lowest_low_t1 + atr_multiplier * atr_t1
+    elif stop_loss_strategy == 'Default':
+        base_long_t1 = t_1_close_price - atr_multiplier * atr_t1
+        base_short_t1 = t_1_close_price + atr_multiplier * atr_t1
+
+    prev_stop_loss = df[stop_loss_col].loc[previous_date]
+
+    # ---------- entry eligibility gate (prevents instant-stop entries) ----------
+    # If target says "go long" but open <= long base -> block NEW long entry today (keep trims/closes).
+    # If target says "go short" but open >= short base -> block NEW short entry today.
+    # This only blocks fresh exposure; if you already have a position, normal trading proceeds.
+    if np.isfinite(atr_t1):
+        if target_notional > 0 and open_position_notional <= 0 and open_price <= base_long_t1:
+            new_trade_notional = 0.0
+            df[event_col].loc[date] = f'Entry Blocked by {stop_loss_strategy} (Long)'
+        if target_notional < 0 and open_position_notional >= 0 and open_price >= base_short_t1:
+            new_trade_notional = 0.0
+            df[event_col].loc[date] = f'Entry Blocked by {stop_loss_strategy} (Short)'
+
+    # --- compute net trade notional safely ---
+    if abs(new_trade_notional) < 1e-12:
+        net_trade_notional = 0.0
+        df[new_position_notional_col].loc[date] = 0.0
+        df[new_position_size_col].loc[date] = 0.0
+        df[new_position_entry_exit_price_col].loc[date] = open_price
     else:
-        net_trade_notional = new_trade_notional + trade_fees
-    df[new_position_notional_col].loc[date] = net_trade_notional
-    df[new_position_size_col].loc[date] = net_trade_notional / open_price
-    df[new_position_entry_exit_price_col].loc[date] = open_price
+        # if your `trade_fees` is a *rate*, recompute fees from the clamped notional:
+        # trade_fees = abs(new_trade_notional) * est_fees
+        if new_trade_notional > 0:
+            net_trade_notional = new_trade_notional - trade_fees
+        else:
+            net_trade_notional = new_trade_notional + trade_fees
+        df[new_position_notional_col].loc[date] = net_trade_notional
+        df[new_position_size_col].loc[date] = net_trade_notional / open_price
+        df[new_position_entry_exit_price_col].loc[date] = open_price
 
     # Actual Positions
     df[actual_position_notional_col].loc[date] = (df[new_position_notional_col].loc[date] +
@@ -363,13 +406,19 @@ def update_new_and_open_positions(df, ticker, date, new_trade_notional, trade_fe
     df[actual_position_size_col].loc[date] = (df[new_position_size_col].loc[date] +
                                               df[open_position_size_col].loc[date])
 
-    ## Update Trailing Stop Loss
-    if df[actual_position_notional_col].loc[date] > 0:
-        df[stop_loss_col].loc[date] = open_price - atr_value * atr_multiplier
-    elif df[actual_position_notional_col].loc[date] < 0:
-        df[stop_loss_col].loc[date] = open_price + atr_value * atr_multiplier
+    ## Update Trailing Stop Loss Strategy. The stop loss prices are ratcheted
+    if df[actual_position_notional_col].loc[date] > 0:  # long position
+        df[stop_loss_col].loc[date] = max(
+            prev_stop_loss if np.isfinite(prev_stop_loss) else -np.inf,
+            base_long_t1 if np.isfinite(base_long_t1) else -np.inf
+        )
+    elif df[actual_position_notional_col].loc[date] < 0:  # short position
+        df[stop_loss_col].loc[date] = min(
+            prev_stop_loss if np.isfinite(prev_stop_loss) else np.inf,
+            base_short_t1 if np.isfinite(base_short_t1) else np.inf
+        )
     else:
-        df[stop_loss_col].loc[date] = 0
+        df[stop_loss_col].loc[date] = np.nan  # flat
 
     ## Update Available Cash and Short Sale Proceeds
     if new_trade_notional > 0:
@@ -457,6 +506,8 @@ def handle_stop_loss_breach(df, ticker, date, est_fees, stop_loss_col, open_pric
         net_trade_notional = new_trade_notional * (1 - est_fees)
         df.at[date, actual_position_notional_col] = 0
         df.at[date, actual_position_size_col] = 0
+        df.at[date, open_position_notional_col] = 0
+        df.at[date, open_position_size_col] = 0
         df.at[date, new_position_notional_col] = new_trade_notional
         df.at[date, new_position_size_col] = new_trade_notional / prev_stop_loss
         df.at[date, new_position_entry_exit_price_col] = prev_stop_loss
@@ -473,7 +524,8 @@ def handle_stop_loss_breach(df, ticker, date, est_fees, stop_loss_col, open_pric
 
 
 def get_target_volatility_daily_portfolio_positions(df, ticker_list, initial_capital, rolling_cov_window,
-                                                    rolling_atr_window, atr_multiplier, cash_buffer_percentage,
+                                                    stop_loss_strategy, rolling_atr_window, atr_multiplier,
+                                                    highest_high_window, cash_buffer_percentage,
                                                     annualized_target_volatility, transaction_cost_est=0.001,
                                                     passive_trade_rate=0.05, notional_threshold_pct=0.02,
                                                     min_trade_notional_abs=10, cooldown_counter_threshold=3,
@@ -504,7 +556,7 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, initial_cap
         df[f'{ticker}_target_vol_normalized_weight'] = 0.0
         df[f'{ticker}_target_notional'] = 0.0
         df[f'{ticker}_target_size'] = 0.0
-        df[f'{ticker}_cash_shrink_factor'] = 0.0
+        # df[f'{ticker}_cash_shrink_factor'] = 0.0
         df[f'{ticker}_stop_loss'] = 0.0
         df[f'{ticker}_stopout_flag'] = False
         df[f'{ticker}_cooldown_counter'] = 0.0
@@ -523,6 +575,7 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, initial_cap
     df['target_vol_scaling_factor'] = 1.0
     df['cash_scaling_factor'] = 1.0
     df['final_scaling_factor'] = 1.0
+    df[f'cash_shrink_factor'] = 1.0
 
     ## Cash and the Total Portfolio Value on Day 1 is the initial capital for the strategy
     if use_specific_start_date:
@@ -559,7 +612,8 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, initial_cap
 
         ## Get the daily positions
         df = get_daily_positions_and_portfolio_cash(
-            df, date, previous_date, desired_positions, cash_shrink_factor, ticker_list, rolling_atr_window,
-            atr_multiplier, transaction_cost_est, passive_trade_rate, cooldown_counter_threshold)
+            df, date, previous_date, desired_positions, cash_shrink_factor, ticker_list,
+            stop_loss_strategy, rolling_atr_window, atr_multiplier, highest_high_window,
+            transaction_cost_est, passive_trade_rate, cooldown_counter_threshold)
 
     return df

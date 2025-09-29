@@ -1046,8 +1046,9 @@ def apply_target_volatility_position_sizing_continuous_strategy(
         ma_crossover_signal_weight, donchian_signal_weight, weighted_signal_ewm_window=4,
         use_activation=True, tanh_activation_constant_dict=None, moving_avg_type='exponential',
         long_only=False, price_or_returns_calc='price', initial_capital=15000, rolling_cov_window=20,
-        volatility_window=20, rolling_atr_window=20, atr_multiplier=0.5,
-        transaction_cost_est=0.001, passive_trade_rate=0.05, notional_threshold_pct=0.05, min_trade_notional_abs=10,
+        volatility_window=20, stop_loss_strategy='Chandelier', rolling_atr_window=20, atr_multiplier=0.5,
+        highest_high_window=56, transaction_cost_est=0.001, passive_trade_rate=0.05,
+        notional_threshold_pct=0.05, min_trade_notional_abs=10,
         cooldown_counter_threshold=3, use_coinbase_data=True, use_saved_files=True,
         saved_file_end_date='2025-07-31', rolling_sharpe_window=50, cash_buffer_percentage=0.10,
         annualized_target_volatility=0.20, annual_trading_days=365, use_specific_start_date=False,
@@ -1079,6 +1080,7 @@ def apply_target_volatility_position_sizing_continuous_strategy(
     ## Get Average True Range for Stop Loss Calculation
     df_atr = size_cont.get_average_true_range_portfolio(start_date=start_date, end_date=end_date,
                                                         ticker_list=ticker_list, rolling_atr_window=rolling_atr_window,
+                                                        highest_high_window=highest_high_window,
                                                         price_or_returns_calc='price',
                                                         use_coinbase_data=use_coinbase_data,
                                                         use_saved_files=use_saved_files,
@@ -1089,8 +1091,9 @@ def apply_target_volatility_position_sizing_continuous_strategy(
     ## Get Target Volatility Position Sizing and Run Cash Management
     df = size_cont.get_target_volatility_daily_portfolio_positions(
         df_signal, ticker_list=ticker_list, initial_capital=initial_capital, rolling_cov_window=rolling_cov_window,
-        rolling_atr_window=rolling_atr_window, atr_multiplier=atr_multiplier,
-        cash_buffer_percentage=cash_buffer_percentage, annualized_target_volatility=annualized_target_volatility,
+        stop_loss_strategy=stop_loss_strategy, rolling_atr_window=rolling_atr_window, atr_multiplier=atr_multiplier,
+        highest_high_window=highest_high_window, cash_buffer_percentage=cash_buffer_percentage,
+        annualized_target_volatility=annualized_target_volatility,
         transaction_cost_est=transaction_cost_est, passive_trade_rate=passive_trade_rate,
         notional_threshold_pct=notional_threshold_pct, min_trade_notional_abs=min_trade_notional_abs,
         cooldown_counter_threshold=cooldown_counter_threshold,
@@ -1304,7 +1307,8 @@ def apply_target_volatility_position_sizing_continuous_strategy_with_rolling_r_s
         rolling_r2_window=30, lower_r_sqr_limit=0.2, upper_r_sqr_limit=0.8, r2_smooth_window=3, r2_confirm_days=0,
         use_activation=True, tanh_activation_constant_dict=None, moving_avg_type='exponential', long_only=False,
         price_or_returns_calc='price', initial_capital=15000, rolling_cov_window=20, volatility_window=20,
-        rolling_atr_window=20, atr_multiplier=0.5, transaction_cost_est=0.001, passive_trade_rate=0.05,
+        stop_loss_strategy='Chandelier', rolling_atr_window=20, atr_multiplier=0.5, highest_high_window=56,
+        transaction_cost_est=0.001, passive_trade_rate=0.05,
         notional_threshold_pct=0.05, min_trade_notional_abs=10, cooldown_counter_threshold=3, use_coinbase_data=True,
         use_saved_files=True, saved_file_end_date='2025-07-31', rolling_sharpe_window=50, cash_buffer_percentage=0.10,
         annualized_target_volatility=0.20, annual_trading_days=365,
@@ -1338,6 +1342,7 @@ def apply_target_volatility_position_sizing_continuous_strategy_with_rolling_r_s
     ## Get Average True Range for Stop Loss Calculation
     df_atr = size_cont.get_average_true_range_portfolio(start_date=start_date, end_date=end_date,
                                                         ticker_list=ticker_list, rolling_atr_window=rolling_atr_window,
+                                                        highest_high_window=highest_high_window,
                                                         price_or_returns_calc='price',
                                                         use_coinbase_data=use_coinbase_data,
                                                         use_saved_files=use_saved_files,
@@ -1348,7 +1353,8 @@ def apply_target_volatility_position_sizing_continuous_strategy_with_rolling_r_s
     ## Get Target Volatility Position Sizing and Run Cash Management
     df = size_cont.get_target_volatility_daily_portfolio_positions(
         df_signal, ticker_list=ticker_list, initial_capital=initial_capital, rolling_cov_window=rolling_cov_window,
-        rolling_atr_window=rolling_atr_window, atr_multiplier=atr_multiplier,
+        stop_loss_strategy=stop_loss_strategy, rolling_atr_window=rolling_atr_window, atr_multiplier=atr_multiplier,
+        highest_high_window=highest_high_window,
         cash_buffer_percentage=cash_buffer_percentage, annualized_target_volatility=annualized_target_volatility,
         transaction_cost_est=transaction_cost_est, passive_trade_rate=passive_trade_rate,
         notional_threshold_pct=notional_threshold_pct, min_trade_notional_abs=min_trade_notional_abs,
@@ -1581,7 +1587,8 @@ def apply_target_volatility_position_sizing_continuous_strategy_with_rolling_r_s
         log_std_window=14, coef_of_variation_window=30, vol_of_vol_z_score_window=252, vol_of_vol_p_min=0.6,
         r2_strong_threshold=0.8, use_activation=True, tanh_activation_constant_dict=None, moving_avg_type='exponential',
         long_only=False, price_or_returns_calc='price', initial_capital=15000, rolling_cov_window=20,
-        volatility_window=20, rolling_atr_window=20, atr_multiplier=0.5, transaction_cost_est=0.001,
+        volatility_window=20, stop_loss_strategy='Chandelier', rolling_atr_window=20, atr_multiplier=0.5,
+        highest_high_window=56, transaction_cost_est=0.001,
         passive_trade_rate=0.05, notional_threshold_pct=0.05, min_trade_notional_abs=10, cooldown_counter_threshold=3,
         use_coinbase_data=True, use_saved_files=True, saved_file_end_date='2025-07-31', rolling_sharpe_window=50,
         cash_buffer_percentage=0.10, annualized_target_volatility=0.20, annual_trading_days=365,
@@ -1618,6 +1625,7 @@ def apply_target_volatility_position_sizing_continuous_strategy_with_rolling_r_s
     ## Get Average True Range for Stop Loss Calculation
     df_atr = size_cont.get_average_true_range_portfolio(start_date=start_date, end_date=end_date,
                                                         ticker_list=ticker_list, rolling_atr_window=rolling_atr_window,
+                                                        highest_high_window=highest_high_window,
                                                         price_or_returns_calc='price',
                                                         use_coinbase_data=use_coinbase_data,
                                                         use_saved_files=use_saved_files,
@@ -1628,7 +1636,8 @@ def apply_target_volatility_position_sizing_continuous_strategy_with_rolling_r_s
     ## Get Target Volatility Position Sizing and Run Cash Management
     df = size_cont.get_target_volatility_daily_portfolio_positions(
         df_signal, ticker_list=ticker_list, initial_capital=initial_capital, rolling_cov_window=rolling_cov_window,
-        rolling_atr_window=rolling_atr_window, atr_multiplier=atr_multiplier,
+        stop_loss_strategy=stop_loss_strategy, rolling_atr_window=rolling_atr_window, atr_multiplier=atr_multiplier,
+        highest_high_window=highest_high_window,
         cash_buffer_percentage=cash_buffer_percentage, annualized_target_volatility=annualized_target_volatility,
         transaction_cost_est=transaction_cost_est, passive_trade_rate=passive_trade_rate,
         notional_threshold_pct=notional_threshold_pct, min_trade_notional_abs=min_trade_notional_abs,
