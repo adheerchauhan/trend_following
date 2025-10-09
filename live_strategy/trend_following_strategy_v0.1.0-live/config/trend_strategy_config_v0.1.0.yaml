@@ -42,8 +42,8 @@ signals:
     exit_rolling_donchian_window: 28
     use_donchian_exit_gate: false
   weighting:
-    ma_crossover_signal_weight: 0.9
-    donchian_signal_weight: 0.1
+    ma_crossover_signal_weight: 0.85
+    donchian_signal_weight: 0.15
     weighted_signal_ewm_window: 4
   activation:
     use_activation: false
@@ -63,18 +63,19 @@ signals:
       vol_of_vol_p_min: 0.10
 
 risk_and_sizing:
-  annualized_target_volatility: 0.55
+  annualized_target_volatility: 0.45
   volatility_window: 30
-  rolling_cov_window: 20
+  rolling_cov_window: 30
   rolling_atr_window: 20
-  atr_multiplier: 2.5
+  atr_multiplier: 1.75
+  stop_loss_strategy: 'Chandelier'
   highest_high_window: 56
   rolling_sharpe_window: 50
-  cash_buffer_percentage: 0.10
+  cash_buffer_percentage: 0.15
 
 execution_and_costs:
   transaction_cost_est: 0.001
   passive_trade_rate: 0.05
   notional_threshold_pct: 0.10
   min_trade_notional_abs: 10
-  cooldown_counter_threshold: 0
+  cooldown_counter_threshold: 7
