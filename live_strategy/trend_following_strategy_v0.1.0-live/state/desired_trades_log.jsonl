@@ -1,0 +1,5 @@
+{"ts": "2025-10-19T23:45:42.458561+00:00", "date": "2025-10-19", "ticker": "BTC-USD", "new_trade_notional": 0.0, "reason": "below_threshold"}
+{"ts": "2025-10-19T23:45:42.458804+00:00", "date": "2025-10-19", "ticker": "ETH-USD", "new_trade_notional": 0.0, "reason": "below_threshold"}
+{"ts": "2025-10-19T23:45:42.458915+00:00", "date": "2025-10-19", "ticker": "SOL-USD", "new_trade_notional": 0.0, "reason": "cooldown_active"}
+{"ts": "2025-10-19T23:45:42.459013+00:00", "date": "2025-10-19", "ticker": "ADA-USD", "new_trade_notional": 0.0, "reason": "below_threshold"}
+{"ts": "2025-10-19T23:45:42.459106+00:00", "date": "2025-10-19", "ticker": "AVAX-USD", "new_trade_notional": 0.0, "reason": "cooldown_active"}

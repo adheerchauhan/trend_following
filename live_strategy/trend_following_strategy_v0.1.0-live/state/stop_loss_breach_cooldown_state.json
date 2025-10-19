@@ -1,0 +1,12 @@
+{
+  "AVAX-USD": {
+    "cooldown_until": "2025-10-24",
+    "last_breach_date": "2025-10-17",
+    "note": "gate_block@19.814999999999998"
+  },
+  "SOL-USD": {
+    "cooldown_until": "2025-10-24",
+    "last_breach_date": "2025-10-17",
+    "note": "gate_block@180.70499999999998"
+  }
+}

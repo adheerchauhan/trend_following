@@ -1,0 +1,2 @@
+{"ts": "2025-10-17T12:54:32.003859+00:00", "ticker": "SOL-USD", "event": "start_cooldown", "breach_date": "2025-10-17", "cooldown_until": "2025-10-24", "note": "gate_block@180.70499999999998"}
+{"ts": "2025-10-17T12:54:32.009334+00:00", "ticker": "AVAX-USD", "event": "start_cooldown", "breach_date": "2025-10-17", "cooldown_until": "2025-10-24", "note": "gate_block@19.814999999999998"}

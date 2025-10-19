@@ -1,0 +1,5 @@
+{"ts": "2025-10-19T23:45:43.761402+00:00", "ticker": "BTC-USD", "ok": true, "action": "skip", "reason": "no_position", "open_stop_price": 0.0, "stop_today": 119080.16910186132, "desired_stop": 119080.17, "tick": 0.01}
+{"ts": "2025-10-19T23:45:44.650330+00:00", "ticker": "ETH-USD", "ok": true, "action": "skip", "reason": "no_position", "open_stop_price": 0.0, "stop_today": 4488.092068466374, "desired_stop": 4488.09, "tick": 0.01}
+{"ts": "2025-10-19T23:45:45.593887+00:00", "ticker": "SOL-USD", "ok": true, "action": "skip", "reason": "no_position", "open_stop_price": 0.0, "stop_today": 225.83583550817326, "desired_stop": 225.84, "tick": 0.01}
+{"ts": "2025-10-19T23:45:46.411959+00:00", "ticker": "ADA-USD", "ok": true, "action": "skip", "reason": "no_position", "open_stop_price": 0.0, "stop_today": 0.8626984076042574, "desired_stop": 0.8627, "tick": 0.0001}
+{"ts": "2025-10-19T23:45:47.240507+00:00", "ticker": "AVAX-USD", "ok": true, "action": "skip", "reason": "no_position", "open_stop_price": 0.0, "stop_today": 32.11177807575904, "desired_stop": 32.11, "tick": 0.01}

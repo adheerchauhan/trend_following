@@ -1,0 +1,9 @@
+# ===== RUN START: 2025-10-19T23:45:26.975584+00:00 — Trend Following =====
+{"ts": "2025-10-19T23:45:26.975584+00:00", "event": "config_loaded", "portfolio": "Trend Following", "tickers": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD"], "dry_run": true}
+{"ts": "2025-10-19T23:45:27.132950+00:00", "event": "client_ready", "portfolio": "Trend Following"}
+{"ts": "2025-10-19T23:45:42.458152+00:00", "event": "desired_trades_ready", "total_buys": 0, "total_sells": 0, "total_zero": 5}
+{"ts": "2025-10-19T23:45:42.459231+00:00", "event": "rebalance_built", "count": 0}
+{"ts": "2025-10-19T23:45:42.958198+00:00", "event": "dust_built", "count": 0}
+{"ts": "2025-10-19T23:45:47.242149+00:00", "event": "run_complete", "date": "2025-10-19"}
+# ----- RUN END:   2025-10-19T23:45:47.242149+00:00 -----
+
