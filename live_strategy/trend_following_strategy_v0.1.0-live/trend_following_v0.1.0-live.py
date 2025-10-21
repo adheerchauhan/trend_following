@@ -30,6 +30,7 @@ from strategy_signal import trend_following_signal as tf
 from pathlib import Path
 import yaml
 import uuid
+from trend_following_email_summary import send_summary_email
 
 
 STATE_DIR = Path("/Users/adheerchauhan/Documents/git/trend_following/live_strategy/trend_following_strategy_v0.1.0-live/state")
@@ -1100,6 +1101,15 @@ def main():
         # 9) Done flag & heartbeat
         flag.write_text(now.isoformat())
         log_event("run_complete", date=str(today))
+
+        # 10) Send summary email
+        try:
+            ok, msg = send_summary_email(STATE_DIR, today)
+            print(f"[email] summary: {ok} ({msg})", flush=True)
+        except Exception as e:
+            # don’t let email failure crash the run; log it
+            write_jsonl(LIVE_ERRORS_LOG, {"ts": utc_now_iso(), "where": "send_summary_email", "error": str(e)})
+
         print(f"success: {today} complete", flush=True)
 
     except Exception as e:
