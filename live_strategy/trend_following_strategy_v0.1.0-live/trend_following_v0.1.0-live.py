@@ -115,14 +115,20 @@ def log_event(kind: str, **payload):
 
 ## Load Config file for the strategy
 def load_prod_strategy_config(strategy_version='v0.1.0'):
-    nb_cwd = Path.cwd()  # git/trend_following/research/notebooks
-    config_path = (
-            nb_cwd.parents[1]  # -> git/trend_following
-            / "live_strategy"
-            / f"trend_following_strategy_{strategy_version}-live"
-            / "config"
-            / f"trend_strategy_config_{strategy_version}.yaml"
-    )
+    # nb_cwd = Path.cwd()  # git/trend_following/research/notebooks
+    # config_path = (
+    #         nb_cwd.parents[1]  # -> git/trend_following
+    #         / "live_strategy"
+    #         / f"trend_following_strategy_{strategy_version}-live"
+    #         / "config"
+    #         / f"trend_strategy_config_{strategy_version}.yaml"
+    # )
+
+    here = Path(__file__).resolve().parent
+    cfg_dir = Path(os.getenv("TF_CONFIG_DIR", here / "config"))
+
+    fname = f"trend_strategy_config_{strategy_version}.yaml"
+    config_path = cfg_dir / fname
 
     print(config_path)  # sanity check
     print(config_path.exists())  # should be True
