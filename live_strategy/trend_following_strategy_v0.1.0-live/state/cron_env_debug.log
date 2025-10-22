@@ -1,0 +1,10 @@
+----- 2025-10-22 01:49:03Z cron start -----
+whoami=adheerchauhan  host=Macmini
+HOME=/Users/adheerchauhan
+PWD(before)=/Users/adheerchauhan
+PYTHON=/opt/anaconda3/envs/crypto_prod/bin/python
+Python 3.12.2
+cwd: /Users/adheerchauhan/Documents/git/trend_following
+sys.executable: /opt/anaconda3/envs/crypto_prod/bin/python
+sys.version_info: sys.version_info(major=3, minor=12, micro=2, releaselevel='final', serial=0)
+path_exists(REPO_ROOT): True
