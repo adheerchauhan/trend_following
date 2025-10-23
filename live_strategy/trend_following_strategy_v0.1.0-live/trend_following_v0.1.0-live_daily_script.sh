@@ -56,4 +56,4 @@ PY
 export PYTHONUNBUFFERED=1
 
 # Run your app
-"$PYTHON" "$PY" --run-at-utc-hour 0 --gate-minutes 5 >> "$LOG_DIR/live_run.log" 2>&1
+"$PYTHON" "$PY" --dry-run --force-run --run-at-utc-hour 0 --gate-minutes 500 >> "$LOG_DIR/live_run.log" 2>&1

@@ -55,6 +55,12 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 
+def _utc_ts(d):
+    """UTC tz-aware Timestamp (00:00Z if 'd' is a date)."""
+    ts = pd.Timestamp(d)
+    return ts.tz_localize('UTC') if ts.tzinfo is None else ts.tz_convert('UTC')
+
+
 def utc_now_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -214,6 +220,16 @@ def calculate_average_true_range_live(date, ticker, rolling_atr_window=20):
     df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
                                                         end_date=end_date, save_to_file=False,
                                                         portfolio_name='Trend Following')
+
+    # Make sure index is UTC tz-aware and sorted
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index, utc=True)
+    elif df.index.tz is None:
+        df.index = df.index.tz_localize('UTC')
+    else:
+        df.index = df.index.tz_convert('UTC')
+    df = df.sort_index()
+
     df.columns = [f'{ticker}_{x}' for x in df.columns]
 
     ## Get T-1 Close Price
@@ -238,12 +254,22 @@ def calculate_average_true_range_live(date, ticker, rolling_atr_window=20):
 def chandelier_stop_long(date, ticker, highest_high_window, rolling_atr_window, atr_multiplier):
     ## Get Average True Range
     df_atr = calculate_average_true_range_live(date=date, ticker=ticker, rolling_atr_window=rolling_atr_window)
-    atr = df_atr.loc[date, f'{ticker}_{rolling_atr_window}_avg_true_range_price']
+    key = _utc_ts(date).floor('D')
+    atr_col = f'{ticker}_{rolling_atr_window}_avg_true_range_price'
+    high_col = f'{ticker}_high'
+
+    # As-of ATR and highest high (safe if 'key' isn’t present yet)
+    atr_series = df_atr[atr_col].loc[:key]
+    if atr_series.empty:
+        raise ValueError(f"No ATR data on or before {key} for {ticker}.")
+    atr = float(atr_series.iloc[-1])
 
     ## Get the Highest High from previous date
-    highest_high_t_1 = df_atr[f'{ticker}_high'].rolling(highest_high_window).max().shift(1)
+    highest_high_t_1_series = df_atr[high_col].rolling(highest_high_window).max().shift(1).loc[:key]
+    if highest_high_t_1_series.empty:
+        raise ValueError(f"No price data on or before {key} for {ticker}.")
+    highest_high_t_1 = float(highest_high_t_1_series.iloc[-1])
     chandelier_stop = highest_high_t_1 - atr_multiplier * atr
-    chandelier_stop = chandelier_stop.loc[date]
 
     return chandelier_stop
 
