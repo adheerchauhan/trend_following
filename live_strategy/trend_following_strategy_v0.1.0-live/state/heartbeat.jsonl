@@ -9,3 +9,75 @@
 
 {"ts": "2025-10-20T00:25:49.242497+00:00", "event": "gate_skip", "hour": 0, "minute": 25}
 {"ts": "2025-10-20T00:26:12.117349+00:00", "event": "gate_skip", "hour": 0, "minute": 26}
+{"ts": "2025-10-20T10:46:03.773625+00:00", "event": "gate_skip", "hour": 10, "minute": 46}
+
+# ===== RUN START: 2025-10-20T10:46:50.362417+00:00 — Trend Following =====
+{"ts": "2025-10-20T10:46:50.362417+00:00", "event": "config_loaded", "portfolio": "Trend Following", "tickers": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD"], "dry_run": true}
+{"ts": "2025-10-20T10:46:50.575447+00:00", "event": "client_ready", "portfolio": "Trend Following"}
+{"ts": "2025-10-20T10:47:04.633265+00:00", "event": "desired_trades_ready", "total_buys": 0, "total_sells": 0, "total_zero": 5}
+{"ts": "2025-10-20T10:47:04.634993+00:00", "event": "rebalance_built", "count": 0}
+{"ts": "2025-10-20T10:47:05.089169+00:00", "event": "dust_built", "count": 0}
+{"ts": "2025-10-20T10:47:08.883009+00:00", "event": "run_complete", "date": "2025-10-20"}
+# ----- RUN END:   2025-10-20T10:47:08.883009+00:00 -----
+
+# ===== RUN START: 2025-10-21T11:23:22.182589+00:00 — Trend Following =====
+{"ts": "2025-10-21T11:23:22.182589+00:00", "event": "config_loaded", "portfolio": "Trend Following", "tickers": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD"], "dry_run": true}
+{"ts": "2025-10-21T11:23:22.377543+00:00", "event": "client_ready", "portfolio": "Trend Following"}
+{"ts": "2025-10-21T11:23:35.472099+00:00", "event": "desired_trades_ready", "total_buys": 0, "total_sells": 0, "total_zero": 5}
+{"ts": "2025-10-21T11:23:35.475306+00:00", "event": "rebalance_built", "count": 0}
+{"ts": "2025-10-21T11:23:35.936330+00:00", "event": "dust_built", "count": 0}
+{"ts": "2025-10-21T11:23:39.500759+00:00", "event": "run_complete", "date": "2025-10-21"}
+# ----- RUN END:   2025-10-21T11:23:39.500759+00:00 -----
+
+# ===== RUN START: 2025-10-22T01:49:12.921671+00:00 — Trend Following =====
+{"ts": "2025-10-22T01:49:12.921671+00:00", "event": "config_loaded", "portfolio": "Trend Following", "tickers": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD"], "dry_run": true}
+{"ts": "2025-10-22T01:49:13.163074+00:00", "event": "client_ready", "portfolio": "Trend Following"}
+{"ts": "2025-10-22T01:49:26.699553+00:00", "event": "desired_trades_ready", "total_buys": 0, "total_sells": 0, "total_zero": 5}
+{"ts": "2025-10-22T01:49:26.701889+00:00", "event": "rebalance_built", "count": 0}
+{"ts": "2025-10-22T01:49:27.164552+00:00", "event": "dust_built", "count": 0}
+{"ts": "2025-10-22T01:49:30.927112+00:00", "event": "run_complete", "date": "2025-10-22"}
+# ----- RUN END:   2025-10-22T01:49:30.927112+00:00 -----
+
+{"ts": "2025-10-22T23:00:09.482637+00:00", "event": "gate_skip", "hour": 23, "minute": 0}
+
+# ===== RUN START: 2025-10-23T00:00:08.048878+00:00 — Trend Following =====
+{"ts": "2025-10-23T00:00:08.048878+00:00", "event": "config_loaded", "portfolio": "Trend Following", "tickers": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD"], "dry_run": false}
+{"ts": "2025-10-23T00:00:08.297858+00:00", "event": "client_ready", "portfolio": "Trend Following"}
+
+# ===== RUN START: 2025-10-23T01:16:25.034458+00:00 — Trend Following =====
+{"ts": "2025-10-23T01:16:25.034458+00:00", "event": "config_loaded", "portfolio": "Trend Following", "tickers": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD"], "dry_run": true}
+{"ts": "2025-10-23T01:16:25.305324+00:00", "event": "client_ready", "portfolio": "Trend Following"}
+{"ts": "2025-10-23T01:16:39.191158+00:00", "event": "desired_trades_ready", "total_buys": 0, "total_sells": 0, "total_zero": 5}
+{"ts": "2025-10-23T01:16:39.192831+00:00", "event": "rebalance_built", "count": 0}
+{"ts": "2025-10-23T01:16:39.714400+00:00", "event": "dust_built", "count": 0}
+{"ts": "2025-10-23T01:16:43.637773+00:00", "event": "run_complete", "date": "2025-10-23"}
+# ----- RUN END:   2025-10-23T01:16:43.637773+00:00 -----
+
+# ===== RUN START: 2025-10-23T02:16:50.421039+00:00 — Trend Following =====
+{"ts": "2025-10-23T02:16:50.421039+00:00", "event": "config_loaded", "portfolio": "Trend Following", "tickers": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD"], "dry_run": true}
+{"ts": "2025-10-23T02:16:50.588220+00:00", "event": "client_ready", "portfolio": "Trend Following"}
+
+# ===== RUN START: 2025-10-23T02:21:43.286871+00:00 — Trend Following =====
+{"ts": "2025-10-23T02:21:43.286871+00:00", "event": "config_loaded", "portfolio": "Trend Following", "tickers": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD"], "dry_run": true}
+{"ts": "2025-10-23T02:21:43.453903+00:00", "event": "client_ready", "portfolio": "Trend Following"}
+
+# ===== RUN START: 2025-10-23T02:23:17.244773+00:00 — Trend Following =====
+{"ts": "2025-10-23T02:23:17.244773+00:00", "event": "config_loaded", "portfolio": "Trend Following", "tickers": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD"], "dry_run": true}
+{"ts": "2025-10-23T02:23:17.395819+00:00", "event": "client_ready", "portfolio": "Trend Following"}
+{"ts": "2025-10-23T02:23:32.350307+00:00", "event": "desired_trades_ready", "total_buys": 0, "total_sells": 0, "total_zero": 5}
+{"ts": "2025-10-23T02:23:32.352389+00:00", "event": "rebalance_built", "count": 0}
+{"ts": "2025-10-23T02:23:32.783926+00:00", "event": "dust_built", "count": 0}
+{"ts": "2025-10-23T02:23:36.409358+00:00", "event": "run_complete", "date": "2025-10-23"}
+# ----- RUN END:   2025-10-23T02:23:36.409358+00:00 -----
+
+{"ts": "2025-10-23T23:00:10.002865+00:00", "event": "gate_skip", "hour": 23, "minute": 0}
+
+# ===== RUN START: 2025-10-24T00:00:09.243925+00:00 — Trend Following =====
+{"ts": "2025-10-24T00:00:09.243925+00:00", "event": "config_loaded", "portfolio": "Trend Following", "tickers": ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "AVAX-USD"], "dry_run": false}
+{"ts": "2025-10-24T00:00:09.514070+00:00", "event": "client_ready", "portfolio": "Trend Following"}
+{"ts": "2025-10-24T00:00:24.274249+00:00", "event": "desired_trades_ready", "total_buys": 0, "total_sells": 0, "total_zero": 5}
+{"ts": "2025-10-24T00:00:24.277613+00:00", "event": "rebalance_built", "count": 0}
+{"ts": "2025-10-24T00:00:24.763940+00:00", "event": "dust_built", "count": 0}
+{"ts": "2025-10-24T00:00:28.668547+00:00", "event": "run_complete", "date": "2025-10-24"}
+# ----- RUN END:   2025-10-24T00:00:28.668547+00:00 -----
+
