@@ -227,6 +227,42 @@ def save_historical_crypto_prices_from_coinbase(ticker, user_start_date=False, s
     return df
 
 
+## Get OHLC data for each coin
+def get_coinbase_candle_data(client, product_id, start_date, end_date):
+    """Return a daily OHLCV DataFrame indexed by date. Empty DF if no data."""
+
+    start_date = pd.Timestamp(start_date)
+    end_date   = pd.Timestamp(end_date)
+    start_timestamp = int(pd.Timestamp(start_date).timestamp())
+    end_timestamp = int(pd.Timestamp(end_date).timestamp())
+
+    resp = client.get_candles(
+        product_id=product_id,
+        start=start_timestamp,
+        end=end_timestamp,
+        granularity='ONE_DAY',
+    )
+    candles = resp.candles or []
+
+    if not candles:
+        # return an empty frame with the expected schema
+        cols = ['low','high','open','close','volume']
+        return pd.DataFrame(columns=cols).astype({c:'float64' for c in cols})
+
+    rows = [{
+        'date':   c['start'],
+        'low':    float(c['low']),
+        'high':   float(c['high']),
+        'open':   float(c['open']),
+        'close':  float(c['close']),
+        'volume': float(c['volume']),
+    } for c in candles]
+
+    df = pd.DataFrame(rows)
+    df['date'] = pd.to_datetime(pd.to_numeric(df['date'], errors='coerce'), unit='s', utc=True).dt.date
+    return df.sort_values('date').set_index('date')
+
+
 def get_coinbase_ohlc_data(ticker):
     pickle_file_path = f"{os.environ.get('HOME')}/Documents/git/trend_following/data_folder/coinbase_historical_price_folder/"
     files = os.listdir(pickle_file_path)
