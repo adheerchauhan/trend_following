@@ -588,6 +588,14 @@ def get_desired_trades_by_ticker(cfg, date):
     ## Generate Strategy Signal from T-1 Data
     df = get_strategy_trend_signal(cfg)
 
+    # --- Ensure df has a normalized, tz-naive DatetimeIndex ---
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index, errors="coerce", utc=True).tz_localize(None)
+    elif df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    df.index = df.index.normalize()
+    df.sort_index(inplace=True)
+
     ## Get Target Notionals by Ticker in Universe
     print(f'Covariance Matrix Time: {datetime.now()}')
     ## Calculate the covariance matrix for tickers in the portfolio
@@ -630,7 +638,22 @@ def get_desired_trades_by_ticker(cfg, date):
     )
 
     ## Identify Daily Positions starting from day 2
-    previous_date = df.index[df.index.get_loc(date) - 1]
+    # previous_date = df.index[df.index.get_loc(date) - 1]
+    # --- Resolve today's row and the previous trading day robustly ---
+    date_ts = pd.Timestamp(date).normalize()
+    idx = df.index
+
+    # first index position >= date_ts
+    cur_pos = idx.searchsorted(date_ts, side="left")
+    if cur_pos >= len(idx):
+        raise ValueError(f"{date_ts.date()} is after last available data ({idx[-1].date()})")
+    # previous trading day MUST exist to seed T-1
+    prev_pos = cur_pos - 1
+    if prev_pos < 0:
+        raise ValueError(f"Not enough history before {date_ts.date()} to seed previous day")
+
+    date = idx[cur_pos]  # trading day used for 'today'
+    previous_date = idx[prev_pos]  # trading day used for T-1
 
     ## Reorder dataframe columns
     for ticker in ticker_list:
@@ -751,6 +774,22 @@ def build_dust_close_orders(client, df, date, ticker_list, min_trade_notional_ab
     Flatten tiny residual positions to zero, but only if expected cost is tiny.
     Sends marketable LIMIT IOC (safer) when use_ioc=True; else MARKET.
     """
+    # 0) make sure index is a normalized DatetimeIndex
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index, errors="coerce", utc=True).tz_localize(None)
+    elif df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    df.index = df.index.normalize()
+    df.sort_index(inplace=True)
+
+    # 1) resolve the trading row for the provided calendar date
+    date_ts = pd.Timestamp(date).normalize()
+    idx = df.index
+    pos = idx.searchsorted(date_ts, side="left")  # first index >= date
+    if pos >= len(idx):
+        raise ValueError(f"{date_ts.date()} is after last available data ({idx[-1].date()})")
+    date = idx[pos]
+
     orders = []
     price_map = cn.get_price_map(client, ticker_list)
     for ticker in ticker_list:
@@ -855,6 +894,23 @@ def update_trailing_stop_chandelier(
         stop_loss_replace_threshold_ticks=1, client_id_prefix="stop-",
         limit_price_buffer=0.005
 ):
+    # --- ensure normalized DatetimeIndex ---
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index, errors="coerce", utc=True).tz_localize(None)
+    elif df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    df.index = df.index.normalize()
+    df.sort_index(inplace=True)
+
+    # --- resolve “today” and “yesterday” on the index ---
+    target = pd.Timestamp(date).normalize()
+    idx = df.index
+    cur_pos = idx.searchsorted(target, side="left")  # first index >= calendar date
+    if cur_pos >= len(idx):
+        return {"ok": False, "action": "skip", "reason": f"date {target.date()} after last data {idx[-1].date()}"}
+    date = idx[cur_pos]
+    previous_date = idx[cur_pos - 1] if cur_pos > 0 else None
+
     # --- specs & compute desired stop ---
     specs = cn.get_product_meta(client, product_id=ticker)
     tick = float(specs['price_increment'])

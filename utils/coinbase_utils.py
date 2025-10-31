@@ -155,6 +155,12 @@ def get_coinbase_daily_historical_price_data(client, ticker, start_timestamp, en
                 granularity=granularity
             ).candles
 
+            # If empty, return an EMPTY frame with expected schema & a proper index name
+            if not candle_list:
+                cols = ["open", "high", "low", "close", "volume"]
+                return (pd.DataFrame(columns=cols)
+                        .rename_axis("date"))
+
             # Process candle data
             candle_data = []
             for candles in candle_list:
@@ -169,14 +175,36 @@ def get_coinbase_daily_historical_price_data(client, ticker, start_timestamp, en
                 candle_data.append(candle_info)
 
             # Convert to DataFrame
-            df_candles = pd.DataFrame(candle_data).sort_values('date')
-            df_candles['date'] = (
-                pd.to_datetime(pd.to_numeric(df_candles['date'], errors='coerce'), unit='s', utc=True)
-                .dt.tz_convert(None)  # optional: drop tz
-                .dt.date  # if you truly want Python date objects
-            )
-            df_candles = df_candles.set_index('date')
-            # df_candles['ticker'] = ticker
+            df_candles = pd.DataFrame(candle_data)#.sort_values('date')
+
+            if df_candles.empty or "date" not in df_candles.columns:
+                cols = ["open", "high", "low", "close", "volume"]
+                return (pd.DataFrame(columns=cols)
+                        .rename_axis("date"))
+
+            # df_candles['date'] = (
+            #     pd.to_datetime(pd.to_numeric(df_candles['date'], errors='coerce'), unit='s', utc=True)
+            #     .dt.tz_convert(None)  # optional: drop tz
+            #     .dt.date  # if you truly want Python date objects
+            # )
+            # # df_candles = df_candles.set_index('date')
+            # df_candles = (df_candles.set_index("date")
+            #               .sort_index()
+            #               .rename_axis("date"))
+            # # df_candles['ticker'] = ticker
+
+            # With this (Timestamp index, normalized to midnight):
+            # epoch seconds -> tz-aware UTC
+            s = pd.to_datetime(pd.to_numeric(df_candles['date'], errors='coerce'), unit='s', utc=True)
+
+            # drop timezone and normalize to midnight
+            s = s.dt.tz_localize(None).dt.normalize()
+
+            df_candles['date'] = s
+            df_candles = (df_candles
+                          .set_index('date')
+                          .sort_index()
+                          .rename_axis('date'))
 
             return df_candles
 

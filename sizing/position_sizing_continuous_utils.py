@@ -12,6 +12,7 @@ def get_average_true_range_portfolio(start_date, end_date, ticker_list, rolling_
 
     atr_list = []
     for ticker in ticker_list:
+        print(ticker)
         atr_cols = [f'{ticker}_{rolling_atr_window}_avg_true_range_{price_or_returns_calc}',
                     f'{ticker}_highest_high_{highest_high_window}', f'{ticker}_lowest_low_{highest_high_window}']
         df_atr = size_bin.calculate_average_true_range(start_date=start_date, end_date=end_date, ticker=ticker,
@@ -532,6 +533,14 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, initial_cap
                                                     annual_trading_days=365, use_specific_start_date=False,
                                                     signal_start_date=None):
 
+    # ensure DatetimeIndex (tz-naive), normalized, sorted
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)
+    elif df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    df.index = df.index.normalize()
+    df.sort_index(inplace=True)
+
     ## Calculate the covariance matrix for tickers in the portfolio
     returns_cols = [f'{ticker}_t_1_close_pct_returns' for ticker in ticker_list]
     cov_matrix = df[returns_cols].rolling(rolling_cov_window).cov(pairwise=True).dropna()
@@ -556,7 +565,6 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, initial_cap
         df[f'{ticker}_target_vol_normalized_weight'] = 0.0
         df[f'{ticker}_target_notional'] = 0.0
         df[f'{ticker}_target_size'] = 0.0
-        # df[f'{ticker}_cash_shrink_factor'] = 0.0
         df[f'{ticker}_stop_loss'] = 0.0
         df[f'{ticker}_stopout_flag'] = False
         df[f'{ticker}_cooldown_counter'] = 0.0
@@ -578,8 +586,10 @@ def get_target_volatility_daily_portfolio_positions(df, ticker_list, initial_cap
     df[f'cash_shrink_factor'] = 1.0
 
     ## Cash and the Total Portfolio Value on Day 1 is the initial capital for the strategy
-    if use_specific_start_date:
-        start_index_position = df.index.get_loc(signal_start_date)
+    if use_specific_start_date and signal_start_date is not None:
+        # start_index_position = df.index.get_loc(signal_start_date)
+        key = pd.Timestamp(signal_start_date).normalize()
+        start_index_position = df.index.get_loc(key)
     else:
         start_index_position = 0
     df['available_cash'][start_index_position] = initial_capital

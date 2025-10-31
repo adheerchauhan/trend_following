@@ -516,8 +516,25 @@ def calculate_average_true_range(start_date, end_date, ticker, price_or_returns_
             df = df[date_cond]
         else:
             # df = cn.get_coinbase_ohlc_data(ticker=ticker)
-            df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, end_date=end_date, save_to_file=False)
-            df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
+            df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True,
+                                                                start_date=start_date, end_date=end_date, save_to_file=False)
+            # df = df[(df.index.get_level_values('date') >= start_date) & (df.index.get_level_values('date') <= end_date)]
+            # 1) Ensure DatetimeIndex (tz-naive) and sorted
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index, errors="coerce", utc=True).tz_localize(None)
+            else:
+                if df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+            df.index = df.index.normalize()
+            df.index.name = "date"
+            df = df.sort_index()
+
+            # 2) Promote bounds to Timestamps (normalized) to match the index
+            start_ts = pd.Timestamp(start_date).normalize()
+            end_ts = pd.Timestamp(end_date).normalize()
+
+            # 3) Slice by label using .loc (don’t use get_level_values unless MultiIndex)
+            df = df.loc[start_ts:end_ts]
         df.columns = [f'{ticker}_{x}' for x in df.columns]
     else:
         df = tf.load_financial_data(start_date, end_date, ticker, print_status=False)  # .shift(1)
