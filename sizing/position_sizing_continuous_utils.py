@@ -458,7 +458,9 @@ def update_new_and_open_positions(df, ticker, date, new_trade_notional, trade_fe
             df[short_sale_proceeds_col].loc[date] = df[short_sale_proceeds_col].loc[date] + abs(net_trade_notional)
 
     ## Register Daily Event
-    df = register_daily_event(df, ticker, date, new_trade_notional, open_position_notional)
+    existing_event = df[event_col].loc[date]
+    if pd.isna(existing_event) or existing_event == '':
+        df = register_daily_event(df, ticker, date, new_trade_notional, open_position_notional)
 
     return df
 
