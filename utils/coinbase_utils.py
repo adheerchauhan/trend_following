@@ -16,6 +16,7 @@ from requests.exceptions import HTTPError
 ## Coinbase API Documentation: https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/rest-api/introduction
 
 coinbase_start_date_by_ticker_dict = {
+    ## L1 Coins
     'BTC-USD': '2016-01-01',
     'ETH-USD': '2016-06-01',
     'SOL-USD': '2021-06-01',
@@ -25,29 +26,69 @@ coinbase_start_date_by_ticker_dict = {
     'ADA-USD': '2021-03-01',
     'AVAX-USD': '2021-09-01',
     'XRP-USD': '2023-06-01',
+    'DOT-USD': '2021-06-01',
+    'ALGO-USD': '2019-08-01',
+    'XLM-USD': '2019-02-01',
+    'ATOM-USD': '2020-01-01',
+    'NEAR-USD': '2022-09-01',
+    'APT-USD': '2022-10-19',
+    'SUI-USD': '2023-05-18',
+    'TON-USD': '2025-11-18',
+    'ICP-USD': '2021-05-10',
+    'XTZ-USD': '2019-08-06',
+    'HBAR-USD': '2022-10-13',
+    'EGLD-USD': '2022-12-07',
+    'STX-USD': '2022-01-20',
+    'FIL-USD': '2020-12-09',
+    'RNDR-USD': '2022-02-03',
+
+    ## L2 Coins
+    'MATIC-USD': '2021-02-01',
+    'SKL-USD': '2021-02-01',
+    'OP-USD': '2022-06-01',
+    'ARB-USD': '2023-03-23',
+    'POL-USD': '2024-09-04',
+    'IMX-USD': '2021-12-09',
+    'STRK-USD': '2024-02-21',
+    'BLAST-USD': '2024-06-26',
+
+    ## Stable Coins
+    'USDT-USD': '2021-05-04',
+    'DAI-USD': '2020-04-01',
+    'USD1-USD': '2025-08-21',
+    'PAX-USD': '2021-07-27',
+
+    ## Defi Coins
     'SHIB-USD': '2021-08-01',
     'LINK-USD': '2019-06-01',
     'UNI-USD': '2020-09-01',
-    'DOT-USD': '2021-06-01',
     'FET-USD': '2021-07-01',
-    'ALGO-USD': '2019-08-01',
-    'DAI-USD': '2020-04-01',
     'AAVE-USD': '2020-12-01',
-    'XLM-USD': '2019-02-01',
-    'MATIC-USD': '2021-02-01',
-    'ATOM-USD': '2020-01-01',
     'MANA-USD': '2021-04-01',
     'OXT-USD': '2019-12-01',
     'KRL-USD': '2021-10-01',
     'AMP-USD': '2021-05-01',
     'REQ-USD': '2021-07-01',
-    'SKL-USD': '2021-02-01',
     'GRT-USD': '2020-12-01',
     'MOBILE-USD': '2024-02-01',
     'AIOZ-USD': '2022-02-01',
     'ZRO-USD': '2024-06-01',
     'HNT-USD': '2023-06-01',
-    'HONEY-USD': '2024-01-01'
+    'HONEY-USD': '2024-01-01',
+    'COMP-USD': '2020-06-23',
+    'LDO-USD': '2022-11-17',
+    'MKR-USD': '2020-06-09',
+    'SNX-USD': '2020-12-15',
+    'INJ-USD': '2022-09-20',
+    'SUSHI-USD': '2021-03-11',
+    'CRV-USD': '2021-03-25',
+    'BAL-USD': '2020-10-06',
+    '1INCH-USD': '2021-04-09',
+    'RPL-USD': '2022-12-08',
+    'RSR-USD': '2025-04-22',
+    'DIA-USD': '2022-01-25',
+    'ONDO-USD': '2024-01-22',
+    'ETHFI-USD': '2025-02-06'
 }
 
 
@@ -115,28 +156,50 @@ def determine_coinbase_start_date(ticker_list):
     start_date_dict = {}
     ticker_start_date = '2016-01-01'
     dates = pd.date_range(start=ticker_start_date, periods=12 * 10, freq='MS')
+
+    # Make end_date tz-naive (date) so it plays nicely with your helper
     end_date = dt.datetime.now().date()
+
     for ticker in ticker_list:
+        available_date = None  # reset per ticker
+
         for date in dates:
             try:
-                # Pass the current date as the end_date to the function
                 print(f"Checking data for {ticker}: {date}")
-                df = save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True,
-                                                                 start_date=date, end_date=end_date)
-                available_date = date  # Store the first available date
+                df = cn.save_historical_crypto_prices_from_coinbase(
+                    ticker=ticker,
+                    user_start_date=True,
+                    start_date=date,  # tz-naive Timestamp from pd.date_range
+                    end_date=end_date,  # tz-naive date
+                )
+
+                # If no data returned for this query, move to the next month
+                if df is None or df.empty:
+                    continue
+
+                # Determine the *actual* first date from the returned data
+                if isinstance(df.index, pd.DatetimeIndex):
+                    first_ts = df.index.min()
+                else:
+                    first_ts = pd.to_datetime(df['time']).min()
+
+                available_date = first_ts.date()
                 print(f"Data available from: {available_date}")
-                break  # Exit the loop when data is found
+                break  # Found first non-empty response; stop scanning
+
             except KeyError:
-                pass  # Continue checking the next date if data is not available
+                # Your helper might still raise KeyError if nothing found
+                continue
             except HTTPError:
                 print(f"HTTPError encountered for {ticker}. Skipping further checks.")
                 break  # Stop checking more dates for this ticker
 
-        if available_date:
+        if available_date is not None:
             print(f"First available date for {ticker}: {available_date}")
-            start_date_dict[ticker] = date.strftime('%Y-%m-%d')
+            start_date_dict[ticker] = available_date.strftime('%Y-%m-%d')
         else:
-            print("No data available within the date range.")
+            print(f"No data available within the date range for {ticker}.")
+            start_date_dict[ticker] = None
 
     return start_date_dict
 
