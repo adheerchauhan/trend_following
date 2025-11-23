@@ -38,7 +38,6 @@ coinbase_start_date_by_ticker_dict = {
     'XTZ-USD': '2019-08-06',
     'HBAR-USD': '2022-10-13',
     'EGLD-USD': '2022-12-07',
-    'STX-USD': '2022-01-20',
     'FIL-USD': '2020-12-09',
     'RNDR-USD': '2022-02-03',
 
@@ -51,6 +50,11 @@ coinbase_start_date_by_ticker_dict = {
     'IMX-USD': '2021-12-09',
     'STRK-USD': '2024-02-21',
     'BLAST-USD': '2024-06-26',
+    'ZK-USD': '2024-09-25',
+    'LRC-USD': '2020-09-15',
+    'ZORA-USD': '2025-04-24',
+    'METIS-USD': '2022-06-28',
+    'STX-USD': '2022-01-20',
 
     ## Stable Coins
     'USDT-USD': '2021-05-04',
@@ -166,7 +170,7 @@ def determine_coinbase_start_date(ticker_list):
         for date in dates:
             try:
                 print(f"Checking data for {ticker}: {date}")
-                df = cn.save_historical_crypto_prices_from_coinbase(
+                df = save_historical_crypto_prices_from_coinbase(
                     ticker=ticker,
                     user_start_date=True,
                     start_date=date,  # tz-naive Timestamp from pd.date_range
