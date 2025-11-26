@@ -16,30 +16,34 @@ from requests.exceptions import HTTPError
 ## Coinbase API Documentation: https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/rest-api/introduction
 
 coinbase_start_date_by_ticker_dict = {
-    ## L1 Coins
+    ## L1 Major Coins
     'BTC-USD': '2016-01-01',
     'ETH-USD': '2016-06-01',
     'SOL-USD': '2021-06-01',
-    'LTC-USD': '2016-09-01',
-    'DOGE-USD': '2021-06-01',
-    'CRO-USD': '2021-11-01',
     'ADA-USD': '2021-03-01',
     'AVAX-USD': '2021-09-01',
-    'XRP-USD': '2023-06-01',
     'DOT-USD': '2021-06-01',
+    'ATOM-USD': '2020-01-01',
+    'LTC-USD': '2016-09-01',
+    'XRP-USD': '2023-06-01',
     'ALGO-USD': '2019-08-01',
     'XLM-USD': '2019-02-01',
-    'ATOM-USD': '2020-01-01',
-    'NEAR-USD': '2022-09-01',
-    'APT-USD': '2022-10-19',
-    'SUI-USD': '2023-05-18',
+
+    ## L1 Alt Coins
     'TON-USD': '2025-11-18',
+    'NEAR-USD': '2022-09-01',
     'ICP-USD': '2021-05-10',
-    'XTZ-USD': '2019-08-06',
     'HBAR-USD': '2022-10-13',
+    'SUI-USD': '2023-05-18',
+    'CRO-USD': '2021-11-01',
+    'APT-USD': '2022-10-19',
+    'XTZ-USD': '2019-08-06',
     'EGLD-USD': '2022-12-07',
     'FIL-USD': '2020-12-09',
-    'RNDR-USD': '2022-02-03',
+    'SEI-USD': '2023-08-15',
+    'TIA-USD': '2023-11-01',
+    'KAVA-USD': '2023-01-19',
+    'ROSE-USD': '2022-04-26',
 
     ## L2 Coins
     'MATIC-USD': '2021-02-01',
@@ -56,6 +60,23 @@ coinbase_start_date_by_ticker_dict = {
     'METIS-USD': '2022-06-28',
     'STX-USD': '2022-01-20',
 
+    ## Meme Coins
+    'DOGE-USD': '2021-06-01',
+    'SHIB-USD': '2021-08-01',
+
+    ## AI / Data / Infra Coins
+    'LINK-USD': '2019-06-01',
+    'FET-USD': '2021-07-01',
+    'GRT-USD': '2020-12-01',
+    'RNDR-USD': '2022-02-03',
+    'OXT-USD': '2019-12-01',
+    'AIOZ-USD': '2022-02-01',
+    'MOBILE-USD': '2024-02-01',
+    'HNT-USD': '2023-06-01',
+    'DIA-USD': '2022-01-25',
+    'KRL-USD': '2021-10-01',
+    'ZRO-USD': '2024-06-01',
+
     ## Stable Coins
     'USDT-USD': '2021-05-04',
     'DAI-USD': '2020-04-01',
@@ -63,22 +84,9 @@ coinbase_start_date_by_ticker_dict = {
     'PAX-USD': '2021-07-27',
 
     ## Defi Coins
-    'SHIB-USD': '2021-08-01',
-    'LINK-USD': '2019-06-01',
     'UNI-USD': '2020-09-01',
-    'FET-USD': '2021-07-01',
     'AAVE-USD': '2020-12-01',
-    'MANA-USD': '2021-04-01',
-    'OXT-USD': '2019-12-01',
-    'KRL-USD': '2021-10-01',
     'AMP-USD': '2021-05-01',
-    'REQ-USD': '2021-07-01',
-    'GRT-USD': '2020-12-01',
-    'MOBILE-USD': '2024-02-01',
-    'AIOZ-USD': '2022-02-01',
-    'ZRO-USD': '2024-06-01',
-    'HNT-USD': '2023-06-01',
-    'HONEY-USD': '2024-01-01',
     'COMP-USD': '2020-06-23',
     'LDO-USD': '2022-11-17',
     'MKR-USD': '2020-06-09',
@@ -90,9 +98,13 @@ coinbase_start_date_by_ticker_dict = {
     '1INCH-USD': '2021-04-09',
     'RPL-USD': '2022-12-08',
     'RSR-USD': '2025-04-22',
-    'DIA-USD': '2022-01-25',
     'ONDO-USD': '2024-01-22',
-    'ETHFI-USD': '2025-02-06'
+    'ETHFI-USD': '2025-02-06',
+
+    ## Other Coins
+    'MANA-USD': '2021-04-01',
+    'REQ-USD': '2021-07-01',
+    'HONEY-USD': '2024-01-01'
 }
 
 
