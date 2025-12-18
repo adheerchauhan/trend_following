@@ -9,7 +9,7 @@ run:
   use_specific_start_date: true
   signal_start_date: '2022-04-01'
   warmup_days: 300
-  long_only: trueAt
+  long_only: true
   annual_trading_days: 365
   initial_capital: 15000
 
@@ -24,10 +24,6 @@ universe:
     - CRO-USD
     - XTZ-USD
     - FIL-USD
-    - SKL-USD
-    - IMX-USD
-    - LRC-USD
-    - STX-USD
     - LINK-USD
     - FET-USD
     - GRT-USD
@@ -38,7 +34,7 @@ universe:
   # - AAVE-USD
   sleeves:
     L1_Core:
-      weight: 0.45
+      weight: 0.50
       tickers:
         - BTC-USD
         - ETH-USD
@@ -46,21 +42,14 @@ universe:
         - ADA-USD
         - AVAX-USD
     L1_Alt:
-      weight: 0.20
+      weight: 0.15
       tickers:
         - ICP-USD
         - CRO-USD
         - XTZ-USD
         - FIL-USD
-    L2:
-      weight: 0.25
-      tickers:
-        - SKL-USD
-        - IMX-USD
-        - LRC-USD
-        - STX-USD
     AI:
-      weight: 0.10
+      weight: 0.35
       tickers:
         - LINK-USD
         - FET-USD
@@ -108,7 +97,7 @@ signals:
       vol_of_vol_p_min: 0.10
 
 risk_and_sizing:
-  annualized_target_volatility: 0.75
+  annualized_target_volatility: 0.80
   volatility_window: 30
   rolling_cov_window: 30
   rolling_atr_window: 20
@@ -117,6 +106,11 @@ risk_and_sizing:
   highest_high_window: 56
   rolling_sharpe_window: 50
   cash_buffer_percentage: 0.15
+  risk_max_iterations: 100
+  risk_sleeve_budget_tolerance: 1e-05
+  risk_optimizer_step: 0.5
+  risk_min_signal: 0.0001
+  sleeve_risk_mode: cap
 
 execution_and_costs:
   transaction_cost_est: 0.001
