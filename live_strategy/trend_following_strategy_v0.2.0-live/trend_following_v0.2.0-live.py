@@ -950,6 +950,16 @@ def get_desired_trades_from_target_notional(df, date, ticker_list, current_posit
     return df, desired_positions
 
 
+def ensure_cols(df: pd.DataFrame, col_defaults: dict) -> pd.DataFrame:
+    missing = {c: v for c, v in col_defaults.items() if c not in df.columns}
+    if not missing:
+        return df
+    # One concat = far fewer block insertions
+    add = pd.DataFrame(missing, index=df.index)
+    df = pd.concat([df, add], axis=1)
+    return df
+
+
 def get_desired_trades_by_ticker(client, cfg, date):
 
     ## Strategy Inputs
@@ -1055,26 +1065,29 @@ def get_desired_trades_by_ticker(client, cfg, date):
     date = idx[cur_pos]  # trading day used for 'today'
     previous_date = idx[prev_pos]  # trading day used for T-1
 
-    ## Reorder dataframe columns
+    col_defaults = {}
     for ticker in ticker_list:
-        df[f'{ticker}_new_position_size'] = 0.0
-        df[f'{ticker}_new_position_notional'] = 0.0
-        df[f'{ticker}_open_position_size'] = 0.0
-        df[f'{ticker}_open_position_notional'] = 0.0
-        df[f'{ticker}_actual_position_size'] = 0.0
-        df[f'{ticker}_actual_position_notional'] = 0.0
-        df[f'{ticker}_short_sale_proceeds'] = 0.0
-        df[f'{ticker}_new_position_entry_exit_price'] = 0.0
-        df[f'{ticker}_target_vol_normalized_weight'] = 0.0
-        df[f'{ticker}_target_notional'] = 0.0
-        df[f'{ticker}_target_size'] = 0.0
-        df[f'{ticker}_cash_shrink_factor'] = 0.0
-        df[f'{ticker}_stop_loss'] = 0.0
-        df[f'{ticker}_stopout_flag'] = False
-        df[f'{ticker}_cooldown_counter'] = 0.0
-        df[f'{ticker}_sleeve_risk_multiplier'] = 1.0
-        df[f'{ticker}_sleeve_risk_adj_weights'] = 0.0
-        df[f'{ticker}_event'] = pd.Series(pd.NA, index=df.index, dtype='string')#np.nan
+        col_defaults.update({
+            f'{ticker}_new_position_notional': 0.0,
+            f'{ticker}_open_position_size': 0.0,
+            f'{ticker}_open_position_notional': 0.0,
+            f'{ticker}_actual_position_size': 0.0,
+            f'{ticker}_actual_position_notional': 0.0,
+            f'{ticker}_short_sale_proceeds': 0.0,
+            f'{ticker}_new_position_entry_exit_price': 0.0,
+            f'{ticker}_target_vol_normalized_weight': 0.0,
+            f'{ticker}_target_notional': 0.0,
+            f'{ticker}_target_size': 0.0,
+            f'{ticker}_cash_shrink_factor': 0.0,
+            f'{ticker}_stop_loss': 0.0,
+            f'{ticker}_stopout_flag': False,
+            f'{ticker}_cooldown_counter': 0.0,
+            f'{ticker}_sleeve_risk_multiplier': 1.0,
+            f'{ticker}_sleeve_risk_adj_weights': 0.0,
+            f'{ticker}_event': pd.Series(pd.NA, index=df.index, dtype="string"),
+        })
+
+    df = ensure_cols(df, col_defaults)
     ord_cols = size_bin.reorder_columns_by_ticker(df.columns, ticker_list)
     df = df[ord_cols]
 
