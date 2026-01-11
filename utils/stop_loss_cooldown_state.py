@@ -1,3 +1,4 @@
+import pandas as pd
 import json, os
 from datetime import datetime, timedelta, timezone, date as date_cls
 from pathlib import Path
@@ -6,10 +7,32 @@ from typing import Dict, Tuple, Optional
 DEFAULT_COOLDOWN_DAYS = 7
 
 # ---------- basic utils ----------
-def _as_utc_date(x) -> date_cls:
-    if isinstance(x, datetime):
-        return x.astimezone(timezone.utc).date()
-    return x  # assume it's already a date
+# def _as_utc_date(x) -> date_cls:
+#     if isinstance(x, datetime):
+#         return x.astimezone(timezone.utc).date()
+#     return x  # assume it's already a date
+
+def _as_utc_date(x):
+    """
+    Return a *date* in UTC terms.
+    - If x is tz-aware: convert to UTC then take .date()
+    - If x is tz-naive (your current setup): just take .date()
+      (because you already pass normalized midnight timestamps / trading-day anchors)
+    """
+    if x is None:
+        return None
+
+    # If it's already a python date (not datetime), keep it
+    if isinstance(x, date_cls) and not hasattr(x, "hour"):
+        return x
+
+    ts = pd.Timestamp(x)
+
+    if ts.tz is None:
+        # tz-naive: can't tz_convert; treat as already "day label"
+        return ts.date()
+
+    return ts.tz_convert("UTC").date()
 
 def _iso_date(d: date_cls) -> str:
     return d.isoformat()
