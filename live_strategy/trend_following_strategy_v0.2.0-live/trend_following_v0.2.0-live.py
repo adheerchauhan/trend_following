@@ -488,7 +488,7 @@ def build_rebalance_orders(desired_positions, date, current_positions, client, o
         if abs(raw_notional) < 1e-9:
             continue
 
-        side = 'buy' if raw_notional > 0 else 'sell'
+        side = 'BUY' if raw_notional > 0 else 'SELL'
         mid_px = current_positions[ticker]['ticker_mid_price']
         if not (np.isfinite(mid_px) and mid_px > 0):
             continue
@@ -508,7 +508,7 @@ def build_rebalance_orders(desired_positions, date, current_positions, client, o
         # Enforce base_min_size
         if q_size < base_min:
             # Try rounding up once (only for buys), else skip as dust
-            if side == "buy":
+            if side == "BUY":
                 q_size_up = cn.round_up(raw_size, base_inc)
                 if q_size_up >= base_min:
                     q_size = q_size_up
@@ -523,7 +523,7 @@ def build_rebalance_orders(desired_positions, date, current_positions, client, o
         q_notional = q_size * mid_px
         if quote_min and q_notional < quote_min:
             # For buys, see if one more increment clears the bar
-            if side == "buy":
+            if side == "BUY":
                 q_size_up = cn.round_up((quote_min / mid_px), base_inc)
                 if q_size_up * mid_px >= quote_min:
                     q_size = q_size_up
@@ -545,20 +545,36 @@ def build_rebalance_orders(desired_positions, date, current_positions, client, o
             "client_order_id": cl_order_id,
         }
 
-        if order_type == "limit":
-            # simple passive limit example: improve for real routing
-            if side == "buy":
-                # pay up to mid*(1 + buffer)
+        # Coinbase Advanced Trade API expects "order_configuration"
+        if order_type == "market":
+            order_configuration = {
+                "market_market_ioc": {
+                    "base_size": str(float(q_size))  # base units as string
+                }
+            }
+        elif order_type == "limit":
+            if side == "BUY":
                 px = mid_px * (1 + abs(limit_price_buffer))
             else:
-                # sell no worse than mid * (1 - buffer)
                 px = mid_px * (1 - abs(limit_price_buffer))
             if price_inc:
                 px = cn.round_to_increment(px, price_inc)
-            order["limit_price"] = float(px)
-            order["time_in_force"] = "GTC"
 
-        orders.append(order)
+            order_configuration = {
+                "limit_limit_gtc": {
+                    "base_size": str(float(q_size)),
+                    "limit_price": str(float(px))
+                }
+            }
+        else:
+            raise ValueError(f"Unsupported order_type: {order_type}")
+
+        orders.append({
+            "client_order_id": cl_order_id,
+            "product_id": ticker,
+            "side": side,
+            "order_configuration": order_configuration,
+        })
 
     return orders
 
@@ -669,7 +685,7 @@ def risk_budget_by_sleeve_optimized_by_signal(signals, daily_cov_matrix, ticker_
         if np.allclose(sleeve_risk_adj_weights, 0):
             return sleeve_risk_adj_weights, risk_multiplier
 
-        ## Calculate the Portfolio Variance and Standard Deviaition for today given the current weights
+        ## Calculate the Portfolio Variance and Standard Deviation for today given the current weights
         sigma2 = float(sleeve_risk_adj_weights @ daily_cov_matrix @ sleeve_risk_adj_weights)
         sigma = np.sqrt(sigma2)
 
@@ -1232,7 +1248,7 @@ def build_dust_close_orders(client, df, date, ticker_list, min_trade_notional_ab
         if est_cost > max_cost_usd:
             continue
 
-        side = 'sell' if size_now > 0 else 'buy'
+        side = 'SELL' if size_now > 0 else 'BUY'
         base_sz = cn.round_to_increment(abs(size_now), float(specs['base_increment']))
 
         if use_ioc:
@@ -1241,7 +1257,7 @@ def build_dust_close_orders(client, df, date, ticker_list, min_trade_notional_ab
             best_bid = float(price_map[ticker]['best_bid_price'] or 0.0)
             best_ask = float(price_map[ticker]['best_ask_price'] or 0.0)
             inc = float(specs['price_increment'])
-            if side == 'sell':
+            if side == 'SELL':
                 limit_px = cn.round_down(best_bid if best_bid else 0, inc)
                 tif = "IOC"
                 order_cfg = {"limit_limit_ioc": {"base_size": f"{base_sz}",
@@ -1382,7 +1398,7 @@ def update_trailing_stop_chandelier(
     pv = cn.place_stop_limit_order(
         client=client,
         product_id=ticker,
-        side="sell",
+        side="SELL",
         stop_price=desired_stop,
         size=pos_size,
         client_order_id=client_order_id,
@@ -1425,7 +1441,7 @@ def update_trailing_stop_chandelier(
     cr = cn.place_stop_limit_order(
         client=client,
         product_id=ticker,
-        side="sell",
+        side="SELL",
         stop_price=desired_stop,
         size=pos_size,
         client_order_id=client_order_id,
