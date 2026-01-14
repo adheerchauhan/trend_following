@@ -33,12 +33,15 @@ import uuid
 from trend_following_email_summary_v020 import send_summary_email
 
 
-STATE_DIR = Path("/Users/adheerchauhan/Documents/git/trend_following/live_strategy/trend_following_strategy_v0.2.0-live/state")
+STATE_DIR = Path("/Users/adheerchauhan/Documents/live_strategy_logs/trend_following_v0_2-0-live")
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 COOLDOWN_STATE_FILE = STATE_DIR / "stop_loss_breach_cooldown_state.json"
 COOLDOWN_LOG_FILE   = STATE_DIR / "stop_loss_breach_cooldown_log.jsonl"
 DONE_FLAG_DIR       = STATE_DIR / "done_flags"
 RUN_LOG             = STATE_DIR / "live_run.log"
+
+# Ensure subdirectories exist
+DONE_FLAG_DIR.mkdir(parents=True, exist_ok=True)
 
 # JSONL log files
 LIVE_ERRORS_LOG       = STATE_DIR / "live_errors.jsonl"
@@ -291,8 +294,7 @@ def load_prod_strategy_config(strategy_version='v0.2.0'):
     fname = f"trend_strategy_config_{strategy_version}.yaml"
     config_path = cfg_dir / fname
 
-    print(config_path)  # sanity check
-    print(config_path.exists())  # should be True
+    print(f'Config Path: {config_path}')  # sanity check
 
     with open(config_path, "r") as f:
         cfg = yaml.safe_load(f)
@@ -456,7 +458,6 @@ def refresh_cooldowns_from_stop_fills(
                 end=today_date,
                 client_id_prefix="stop-"
             )
-            print(fills)
             # 'fills' is [(ts, price), ...] sorted ascending
             for ts, px in reversed(fills):
                 # recent STOP fill ⇒ start cooldown dated to fill date
@@ -1005,7 +1006,6 @@ def get_desired_trades_by_ticker(client, cfg, date):
     sleeve_budgets = cfg['universe']['sleeves']
     ticker_to_sleeve = {}
     for sleeve in sleeve_budgets.keys():
-        print(sleeve)
         sleeve_tickers = sleeve_budgets[sleeve]['tickers']
         for ticker in sleeve_tickers:
             ticker_to_sleeve[ticker] = sleeve
