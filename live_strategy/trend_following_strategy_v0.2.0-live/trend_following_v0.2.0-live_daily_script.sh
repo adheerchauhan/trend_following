@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="/Users/adheerchauhan/Documents/git/trend_following"
 PY="$REPO_ROOT/live_strategy/trend_following_strategy_v0.2.0-live/trend_following_v0.2.0-live.py"
-LOG_DIR="$REPO_ROOT/live_strategy/trend_following_strategy_v0.2.0-live/state"
+LOG_DIR="/Users/adheerchauhan/Documents/live_strategy_logs/trend_following_v0_2_0-live/"
 mkdir -p "$LOG_DIR"
 
 # ---- DEBUG LOGGING (temporary while we stabilize) ----

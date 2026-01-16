@@ -7,33 +7,27 @@ if repo_root not in sys.path:
 
 import pandas as pd
 import numpy as np
-import math
 import datetime
 from datetime import datetime, timezone, timedelta
 from typing import Iterable
 import argparse
 import json
 import traceback
-import itertools
-import ast
 from strategy_signal.trend_following_signal import (
     get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr_vol_of_vol
 )
-from portfolio.strategy_performance import (calculate_sharpe_ratio, calculate_calmar_ratio, calculate_CAGR, calculate_risk_and_performance_metrics,
-                                          calculate_compounded_cumulative_returns, estimate_fee_per_trade, rolling_sharpe_ratio)
 from utils import coinbase_utils as cn
 from portfolio import strategy_performance as perf
 from sizing import position_sizing_binary_utils as size_bin
 from sizing import position_sizing_continuous_utils as size_cont
 from utils import stop_loss_cooldown_state as state
-from strategy_signal import trend_following_signal as tf
 from pathlib import Path
 import yaml
 import uuid
 from trend_following_email_summary_v020 import send_summary_email
 
 
-STATE_DIR = Path("/Users/adheerchauhan/Documents/live_strategy_logs/trend_following_v0_2-0-live")
+STATE_DIR = Path("/Users/adheerchauhan/Documents/live_strategy_logs/trend_following_v0_2_0-live")
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 COOLDOWN_STATE_FILE = STATE_DIR / "stop_loss_breach_cooldown_state.json"
 COOLDOWN_LOG_FILE   = STATE_DIR / "stop_loss_breach_cooldown_log.jsonl"
@@ -54,6 +48,10 @@ DUST_SUBMIT_LOG       = STATE_DIR / "dust_submit_log.jsonl"
 STOP_UPDATE_LOG       = STATE_DIR / "stop_update_log.jsonl"
 DAILY_SUMMARY_DIR = STATE_DIR / "daily_summaries"
 DAILY_SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
+
+# Persist per-run dataframes for debugging / audit
+DF_SNAPSHOTS_DIR = STATE_DIR / "df_snapshots"
+DF_SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 CURRENT_RUN_ID = None
 
@@ -141,6 +139,42 @@ def log_event(kind: str, **payload):
     write_jsonl(HEARTBEAT_LOG, {"ts": utc_now_iso(), "event": kind, **payload})
 
 
+def save_df_snapshot(
+    df: pd.DataFrame,
+    *,
+    day,
+    run_id: str,
+    stage: str,
+    folder: Path = DF_SNAPSHOTS_DIR,
+):
+    """Persist a dataframe snapshot for audit/debug.
+
+    Writes Parquet if available, otherwise falls back to pickle.
+    Returns the written file path.
+    """
+    if df is None or getattr(df, "empty", True):
+        return None
+
+    day = pd.Timestamp(day).date()
+    out_dir = folder / day.isoformat()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Make stage filesystem-friendly
+    safe_stage = "".join(c if (c.isalnum() or c in "-_") else "_" for c in str(stage))
+    stem = f"{run_id}_{safe_stage}"
+
+    # Prefer parquet (compact + fast)
+    parquet_path = out_dir / f"{stem}.parquet"
+    try:
+        df.to_parquet(parquet_path, index=True)
+        return parquet_path
+    except Exception:
+        # Fall back to pickle (always available)
+        pkl_path = out_dir / f"{stem}.pkl"
+        df.to_pickle(pkl_path)
+        return pkl_path
+
+
 def write_daily_summary(
     *,
     cfg: dict,
@@ -197,12 +231,6 @@ def write_daily_summary(
                 v = df.loc[date, col_rb]
                 if pd.notna(v):
                     pre_scale_sum += float(v)
-
-            # col_m = f"{t}_sleeve_risk_multiplier"
-            # if col_m in df.columns:
-            #     v = df.loc[date, col_m]
-            #     if pd.notna(v):
-            #         mults.append(float(v))
 
         sleeves[sname] = {
             "budget_weight": float(sconf.get("weight", 0.0)),
@@ -601,6 +629,75 @@ def submit_daily_rebalance_orders(client, orders, *, preview=True):
         except Exception as e:
             results.append({"ok": False, "request": od, "error": f"{type(e).__name__}: {e}"})
     return results
+
+
+def cancel_open_stop_orders_for_product(client, product_id, *, stage="pre_sell", allow_live=True):
+    """
+    Cancel any open STOP (or stop-like) orders for a product. This is important because
+    many stop/limit sell orders reserve base asset, making 'available' = 0 and causing
+    SELL rebalances to fail with INSUFFICIENT_FUND.
+
+    Uses your coinbase_utils helpers:
+      - cn.list_open_stop_orders(client, product_id=...)
+      - cn.cancel_order_by_id(client, order_id=...)
+
+    Returns: {"cancelled": int, "errors": [..], "orders": [..]}
+    """
+    out = {"product_id": product_id, "stage": stage, "cancelled": 0, "errors": [], "orders": []}
+    try:
+        open_orders = cn.list_open_stop_orders(client, product_id=product_id) or []
+    except Exception as e:
+        out["errors"].append(f"list_open_stop_orders: {type(e).__name__}: {e}")
+        return out
+
+    for o in open_orders:
+        try:
+            # Be defensive: treat anything with stop_price or type containing 'stop' as a stop-like order
+            otype = str(o.get("type") or "").lower()
+            if ("stop" not in otype) and (o.get("stop_price") is None):
+                continue
+            oid = o.get("order_id")
+            if not oid:
+                continue
+            out["orders"].append({"order_id": oid, "type": o.get("type"), "stop_price": o.get("stop_price")})
+            if allow_live:
+                cn.cancel_order_by_id(client, order_id=oid)
+            out["cancelled"] += 1
+        except Exception as e:
+            out["errors"].append(f"cancel {o.get('order_id')}: {type(e).__name__}: {e}")
+    return out
+
+
+def refresh_df_actual_position_sizes_from_portfolio(client, df, date, ticker_list, portfolio_name):
+    """After trading, refresh df[<ticker>_actual_position_size] from live Coinbase positions."""
+    try:
+        pos_map = cn.get_current_positions_from_portfolio(client, ticker_list, portfolio_name) or {}
+    except Exception:
+        pos_map = {}
+
+    dt = pd.Timestamp(date).normalize()
+    if dt not in df.index:
+        # align to nearest existing date
+        idx = df.index
+        pos = idx.searchsorted(dt, side="left")
+        if pos >= len(idx):
+            dt = idx[-1]
+        else:
+            dt = idx[pos]
+
+    for t in ticker_list:
+        try:
+            qty = float((pos_map.get(t) or {}).get("ticker_qty", 0.0))
+        except Exception:
+            qty = 0.0
+        col = f"{t}_actual_position_size"
+        try:
+            df.loc[dt, col] = qty
+        except Exception:
+            # if df doesn't have the column yet, create it
+            df[col] = np.nan
+            df.loc[dt, col] = qty
+    return df
 
 
 # --- Helpers ----------------------------------------------------------------
@@ -1323,147 +1420,228 @@ def submit_dust_close_orders(client, orders, preview=True):
 
 
 def update_trailing_stop_chandelier(
-        client, df, ticker, date,
-        highest_high_window=56, rolling_atr_window=20, atr_multiplier=2.5,
-        stop_loss_replace_threshold_ticks=1, client_id_prefix="stop-",
-        limit_price_buffer=0.005
+    client,
+    df,
+    ticker,
+    date,
+    portfolio_name,
+    highest_high_window=56,
+    rolling_atr_window=20,
+    atr_multiplier=2.5,
+    client_id_prefix="stop-",
+    buffer_bps=50,
 ):
-    # --- ensure normalized DatetimeIndex ---
+    """
+    SIMPLE STOP POLICY (no force flags, no reserve math):
+      - If NO position: cancel any existing strategy stop orders (if present); return.
+      - If position > 0: cancel all existing strategy stop orders; place exactly ONE new stop
+        at today's computed Chandelier stop price sized to LIVE position qty.
+
+    Uses df ONLY for chandelier stop calculation.
+    Uses Coinbase ONLY for live qty/mid and live open stop orders.
+    """
+
+    # --- df needed to compute chandelier stop ---
+    if df is None or df.empty:
+        return {"ok": False, "action": "skip", "reason": "df_required_for_chandelier_stop"}
+
+    # Normalize df index for indicator computation
     if not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.to_datetime(df.index, errors="coerce", utc=True).tz_localize(None)
     elif df.index.tz is not None:
         df.index = df.index.tz_localize(None)
     df.index = df.index.normalize()
-    df.sort_index(inplace=True)
+    df = df.sort_index()
 
-    # --- resolve “today” and “yesterday” on the index ---
     target = pd.Timestamp(date).normalize()
-    idx = df.index
-    cur_pos = idx.searchsorted(target, side="left")  # first index >= calendar date
-    if cur_pos >= len(idx):
-        return {"ok": False, "action": "skip", "reason": f"date {target.date()} after last data {idx[-1].date()}"}
-    date = idx[cur_pos]
-    previous_date = idx[cur_pos - 1] if cur_pos > 0 else None
+    if target not in df.index:
+        idx = df.index
+        pos = idx.searchsorted(target, side="right") - 1
+        if pos < 0:
+            return {"ok": False, "action": "skip", "reason": f"date {target.date()} before first data {idx[0].date()}"}
+        date = idx[pos]
+    else:
+        date = target
 
-    # --- specs & compute desired stop ---
+    # --- live specs (increments/mins) ---
     specs = cn.get_product_meta(client, product_id=ticker)
-    tick = float(specs['price_increment'])
-    result_dict = {}
+    tick = float(specs["price_increment"])
+    base_inc = float(specs["base_increment"])
+    quote_min = float(specs.get("quote_min_size") or 0.0)
 
-    stop_today = float(chandelier_stop_long(date, ticker, highest_high_window, rolling_atr_window, atr_multiplier))
-    stop_prev = df.get(f'{ticker}_stop_loss', pd.Series(index=df.index, dtype=float)).shift(1).loc[date]
+    # --- compute today's desired stop from historical data ---
+    stop_today = float(
+        chandelier_stop_long(
+            date,
+            ticker,
+            highest_high_window,
+            rolling_atr_window,
+            atr_multiplier,
+        )
+    )
+    desired_stop = cn.round_to_increment(stop_today, tick)
 
-    # monotone ratchet
-    candidates = [x for x in (stop_prev, stop_today) if np.isfinite(x)]
-    desired_stop = max(candidates) if candidates else stop_today
-    desired_stop = cn.round_to_increment(desired_stop, tick)
+    # --- pull LIVE qty + mid price ---
+    pos_map = (cn.get_current_positions_from_portfolio(client, [ticker], portfolio_name) or {}).get(ticker, {}) or {}
+    pos_qty = float(pos_map.get("ticker_qty", 0.0) or 0.0)
+    mid_px = float(pos_map.get("ticker_mid_price", 0.0) or 0.0)
 
-    # skip if not a meaningful ratchet
-    threshold = (stop_prev if np.isfinite(stop_prev) else -np.inf) + (stop_loss_replace_threshold_ticks * tick)
-    if np.isfinite(stop_prev) and desired_stop < threshold:
-        df.loc[date, f'{ticker}_stop_loss'] = float(stop_prev)
-        result_dict = {
-            "ok": True,
-            "action": "skip",
-            "reason": "no_ratchet",
-            "open_stop_price": float(stop_prev),
-            "stop_today": float(stop_today),
-            "desired_stop": float(desired_stop),
-            "tick": float(tick)
-        }
-        return result_dict
+    # Helper: cancel all existing STRATEGY stops for this ticker
+    def _cancel_strategy_stops():
+        cancelled = 0
+        open_stops = cn.list_open_stop_orders(client, product_id=ticker) or []
+        for o in open_stops:
+            coid = str(o.get("client_order_id") or "")
+            if client_id_prefix and not coid.startswith(client_id_prefix):
+                continue
+            oid = o.get("order_id")
+            if oid:
+                cn.cancel_order_by_id(client, order_id=oid)
+                cancelled += 1
+        return cancelled
 
-    # position size
+    # --- if no position: cancel stops and exit ---
+    if pos_qty <= 0:
+        try:
+            cancelled = _cancel_strategy_stops()
+        except Exception as e:
+            return {"ok": False, "action": "cancel_failed", "reason": "no_position", "error": str(e)}
+
+        # record only (optional)
+        df.loc[date, f"{ticker}_stop_loss"] = float(desired_stop)
+        return {"ok": True, "action": "cancelled" if cancelled else "skip", "reason": "no_position", "cancelled": cancelled}
+
+    if not (np.isfinite(mid_px) and mid_px > 0):
+        return {"ok": False, "action": "skip", "reason": "no_live_mid_price", "pos_qty": float(pos_qty)}
+
+    # --- cancel existing stops FIRST (simple rule: one stop total) ---
     try:
-        pos_size = float(df.loc[date, f'{ticker}_actual_position_size'])
-    except Exception:
-        pos_map = (cn.get_current_positions_from_portfolio(client, [ticker]) or {}).get(ticker, {})
-        pos_size = float(pos_map.get('ticker_qty', 0.0))
-    if pos_size <= 0:
-        df.loc[date, f'{ticker}_stop_loss'] = float(desired_stop)
-        result_dict = {
-            "ok": True,
-            "action": "skip",
-            "reason": "no_position",
-            "open_stop_price": float(stop_prev) if np.isfinite(stop_prev) else None,
-            "stop_today": float(stop_today),
-            "desired_stop": float(desired_stop),
-            "tick": float(tick)
-        }
-        return result_dict
+        cancelled = _cancel_strategy_stops()
+    except Exception as e:
+        # still continue; we may place a new stop anyway
+        cancelled = None
+        print(f"[warn] cancel stops failed for {ticker}: {e}", flush=True)
 
+    # --- size new stop off LIVE qty ---
+    size_for_stop = cn.round_down(pos_qty, base_inc)
+    if size_for_stop <= 0:
+        df.loc[date, f"{ticker}_stop_loss"] = float(desired_stop)
+        return {
+            "ok": False,
+            "action": "no_change",
+            "reason": "size_rounds_to_zero",
+            "pos_qty": float(pos_qty),
+            "base_increment": float(base_inc),
+            "cancelled": cancelled,
+        }
+
+    # --- enforce quote min notional using LIVE mid ---
+    if quote_min and (size_for_stop * mid_px) < quote_min:
+        # try rounding up (do not exceed position qty)
+        size_up = cn.round_up(quote_min / mid_px, base_inc)
+        if size_up <= pos_qty:
+            size_for_stop = size_up
+
+        if (size_for_stop * mid_px) < quote_min:
+            df.loc[date, f"{ticker}_stop_loss"] = float(desired_stop)
+            return {
+                "ok": False,
+                "action": "no_change",
+                "reason": "below_quote_min_size",
+                "quote_min_size": float(quote_min),
+                "mid_px": float(mid_px),
+                "size_for_stop": float(size_for_stop),
+                "pos_qty": float(pos_qty),
+                "cancelled": cancelled,
+            }
+
+    # --- build deterministic client_order_id ---
     client_order_id = f"{client_id_prefix}{ticker}-{date:%Y%m%d}-{int(round(desired_stop / tick))}"
 
-    # --- PREVIEW FIRST (do NOT cancel yet) ---
+    # --- preview new stop ---
     pv = cn.place_stop_limit_order(
         client=client,
         product_id=ticker,
         side="SELL",
-        stop_price=desired_stop,
-        size=pos_size,
+        stop_price=float(desired_stop),
+        size=float(size_for_stop),
         client_order_id=client_order_id,
-        buffer_bps=50,
+        buffer_bps=buffer_bps,
         preview=True,
         price_increment=specs["price_increment"],
         base_increment=specs["base_increment"],
-        quote_min_size=specs["quote_min_size"]
+        quote_min_size=specs.get("quote_min_size"),
     )
     pv_d = cn._as_dict(pv)
     errs = pv_d.get("errs") or []
 
     if errs:
-        # keep old stop; report clearly
-        df.loc[date, f'{ticker}_stop_loss'] = float(stop_prev)  # persist your computed target for next run
-        result_dict = {
+        # IMPORTANT: you just cancelled stops. If preview fails, you risk leaving it unprotected.
+        # Minimal safe behavior: report loudly so you can intervene; optionally restore previous stop if you track it.
+        df.loc[date, f"{ticker}_stop_loss"] = float(desired_stop)
+        return {
             "ok": False,
             "action": "no_change",
-            "reason": "preview_error",
-            "preview_errors": errs,  # e.g., ["PREVIEW_STOP_PRICE_ABOVE_LAST_TRADE_PRICE"]
-            "open_stop_price": float(stop_prev) if np.isfinite(stop_prev) else None,
-            "stop_today": float(stop_today),
+            "reason": "preview_error_after_cancel",
+            "preview_errors": errs,
             "desired_stop": float(desired_stop),
-            "tick": float(tick),
-            "preview_id": pv_d.get("preview_id")
+            "pos_qty": float(pos_qty),
+            "size_for_stop": float(size_for_stop),
+            "mid_px": float(mid_px),
+            "cancelled": cancelled,
         }
-        return result_dict
 
-    # --- PREVIEW OK → now cancel existing stops, then place live ---
-    try:
-        open_orders = cn.list_open_stop_orders(client, product_id=ticker) or []
-        for o in open_orders:
-            otype = str(o.get('type') or '').lower()
-            if ('stop' in otype) or (o.get('stop_price') is not None):
-                cn.cancel_order_by_id(client, order_id=o['order_id'])
-    except Exception as e:
-        # still attempt to place the new one
-        print(f"[warn] cancel stop failed for {ticker}: {e}")
-
+    # --- place live stop (single stop) ---
     cr = cn.place_stop_limit_order(
         client=client,
         product_id=ticker,
         side="SELL",
-        stop_price=desired_stop,
-        size=pos_size,
+        stop_price=float(desired_stop),
+        size=float(size_for_stop),
         client_order_id=client_order_id,
-        buffer_bps=50,
-        preview=False,  # LIVE
+        buffer_bps=buffer_bps,
+        preview=False,
         price_increment=specs["price_increment"],
         base_increment=specs["base_increment"],
-        quote_min_size=specs["quote_min_size"]
+        quote_min_size=specs.get("quote_min_size"),
     )
     cr_d = cn._as_dict(cr)
+    new_order_id = cr_d.get("response", {}).get("order_id") or cr_d.get("order_id")
 
-    df.loc[date, f'{ticker}_stop_loss'] = float(desired_stop)
-    result_dict = {
-        "ok": True,
-        "action": "replaced",
+    order_status = None
+    cancel_message = None
+    reject_message = None
+    create_time = None
+
+    try:
+        od = client.get_order(order_id=new_order_id)
+        od_d = cn._as_dict(od)
+        o = od_d.get("order", od_d)  # some SDKs wrap under "order"
+        order_status = o.get("status")
+        cancel_message = o.get("cancel_message")
+        reject_message = o.get("reject_message")
+        create_time = o.get("create_time")
+    except Exception as e:
+        order_status = f"lookup_failed: {type(e).__name__}: {e}"
+
+    # record only
+    df.loc[date, f"{ticker}_stop_loss"] = float(desired_stop)
+
+    return {
+        "ok": (order_status == "OPEN"),
+        "action": "placed" if (order_status == "OPEN") else "not_open",
+        "cancelled": cancelled,
         "client_order_id": client_order_id,
-        "new_order_id": cr_d.get("response", {}).get("order_id") or cr_d.get("order_id"),
+        "new_order_id": new_order_id,
+        "order_status": order_status,
+        "cancel_message": cancel_message,
+        "reject_message": reject_message,
+        "create_time": create_time,
         "desired_stop": float(desired_stop),
-        "pos_size": float(pos_size),
+        "pos_qty": float(pos_qty),
+        "size_for_stop": float(size_for_stop),
+        "mid_px": float(mid_px),
     }
-
-    return result_dict
 
 
 # ====== MAIN ORCHESTRATOR (uses your order functions) ======
@@ -1530,6 +1708,19 @@ def main():
         #    Returns df (with *_stop_loss, *_event, *_cooldown_counter) and desired_positions dict
         df, desired_positions, current_positions = get_desired_trades_by_ticker(client, cfg, date=today)
 
+        # Persist the primary run-time dataframe for audit/debug
+        try:
+            p = save_df_snapshot(df, day=today, run_id=run_id, stage="post_desired_trades")
+            if p:
+                log_event("df_snapshot_written", stage="post_desired_trades", path=str(p))
+        except Exception as e:
+            write_jsonl(LIVE_ERRORS_LOG, {
+                "ts": utc_now_iso(),
+                "where": "save_df_snapshot",
+                "stage": "post_desired_trades",
+                "error": str(e),
+            })
+
         # Log desired positions summary & any gate reasons
         try:
             total_buys = sum(1 for t, d in desired_positions.items() if float(d.get("new_trade_notional", 0.0)) > 0)
@@ -1565,6 +1756,17 @@ def main():
             write_jsonl(ORDER_BUILD_LOG, {"ts": utc_now_iso(), "stage": "rebalance_build", **o})
         log_event("rebalance_built", count=len(rebalance_orders))
 
+        # Cancel any open STOP orders before submitting SELL rebalance orders.
+        # Stops typically reserve base units, making Available=0 and causing SELLs to fail.
+        sell_products = sorted(
+            {o.get("product_id") for o in (rebalance_orders or []) if str(o.get("side", "")).upper() == "SELL"})
+        for product_id in sell_products:
+            if not product_id:
+                continue
+            cancel_info = cancel_open_stop_orders_for_product(client, product_id, stage="pre_rebalance_sell",
+                                                              allow_live=(not bool(args.dry_run)))
+            write_jsonl(STOP_UPDATE_LOG, {"ts": utc_now_iso(), "stage": "pre_rebalance_sell_cancel", **cancel_info})
+
         # 5) Submit daily rebalance orders
         if rebalance_orders:
             preview_flag = bool(args.dry_run)
@@ -1597,6 +1799,16 @@ def main():
             write_jsonl(DUST_BUILD_LOG, {"ts": utc_now_iso(), "stage": "dust_build", **o})
         log_event("dust_built", count=len(dust_close_orders or []))
 
+        # 7) Cancel open STOP orders before submitting SELL dust-close orders (same 'available' issue as trims/exits).
+        dust_sell_products = sorted(
+            {o.get("product_id") for o in (dust_close_orders or []) if str(o.get("side", "")).upper() == "SELL"})
+        for product_id in dust_sell_products:
+            if not product_id:
+                continue
+            cancel_info = cancel_open_stop_orders_for_product(client, product_id, stage="pre_dust_sell",
+                                                              allow_live=(not bool(args.dry_run)))
+            write_jsonl(STOP_UPDATE_LOG, {"ts": utc_now_iso(), "stage": "pre_dust_sell_cancel", **cancel_info})
+
         if dust_close_orders:
             preview_flag = bool(args.dry_run)
             try:
@@ -1615,17 +1827,55 @@ def main():
                 run_errors.append(err)
                 print(f"[warn] dust submit failed: {e}", flush=True)
 
+        # After submitting orders, refresh live position sizes so stop sizing uses *current* holdings
+        # (rebalance sells/trims change qty; stale df sizes can cause stop placement failures).
+        df = refresh_df_actual_position_sizes_from_portfolio(client, df, today, ticker_list, portfolio_name)
+
+        # Snapshot after live position refresh (useful for stop sizing diagnostics)
+        try:
+            p = save_df_snapshot(df, day=today, run_id=run_id, stage="post_refresh_positions")
+            if p:
+                log_event("df_snapshot_written", stage="post_refresh_positions", path=str(p))
+        except Exception as e:
+            write_jsonl(LIVE_ERRORS_LOG, {
+                "ts": utc_now_iso(),
+                "where": "save_df_snapshot",
+                "stage": "post_refresh_positions",
+                "error": str(e),
+            })
+
+        # If we fully exited any product today, make sure any lingering stop orders are cancelled.
+        sold_products = set()
+        sold_products |= {o.get("product_id") for o in (rebalance_orders or []) if
+                          str(o.get("side", "")).upper() == "SELL"}
+        sold_products |= {o.get("product_id") for o in (dust_close_orders or []) if
+                          str(o.get("side", "")).upper() == "SELL"}
+        sold_products = {p for p in sold_products if p}
+
+        if sold_products:
+            try:
+                post_pos = cn.get_current_positions_from_portfolio(client, list(sold_products)) or {}
+            except Exception:
+                post_pos = {}
+            for product_id in sorted(sold_products):
+                qty = float((post_pos.get(product_id) or {}).get("ticker_qty", 0.0) or 0.0)
+                if qty <= 0:
+                    cancel_info = cancel_open_stop_orders_for_product(
+                        client, product_id, stage="post_exit_cleanup", allow_live=(not bool(args.dry_run))
+                    )
+                    write_jsonl(STOP_UPDATE_LOG,
+                                {"ts": utc_now_iso(), "stage": "post_exit_stop_cancel", **cancel_info})
+
         # 8) Update trailing stops (Chandelier)
         for ticker in ticker_list:
             try:
                 stop_loss_dict = update_trailing_stop_chandelier(
-                    client=client, df=df, ticker=ticker, date=today,
+                    client=client, df=df, ticker=ticker, date=today, portfolio_name=portfolio_name,
                     highest_high_window=highest_high_window,
                     rolling_atr_window=rolling_atr_window,
                     atr_multiplier=atr_multiplier,
-                    stop_loss_replace_threshold_ticks=1,
                     client_id_prefix="stop-",
-                    limit_price_buffer=0.005
+                    buffer_bps=50
                 )
                 stop_results[ticker] = stop_loss_dict or {"ok": True, "action": "none"}
                 write_jsonl(STOP_UPDATE_LOG, {
@@ -1640,6 +1890,19 @@ def main():
                 run_errors.append(err)
                 stop_results[ticker] = {"ok": False, "error": str(e)}
                 print(f"[warn] update_trailing_stop_chandelier({ticker}) failed: {e}", flush=True)
+
+        # Final dataframe snapshot for the run (includes refreshed live sizes and stop columns)
+        try:
+            p = save_df_snapshot(df, day=today, run_id=run_id, stage="final")
+            if p:
+                log_event("df_snapshot_written", stage="final", path=str(p))
+        except Exception as e:
+            write_jsonl(LIVE_ERRORS_LOG, {
+                "ts": utc_now_iso(),
+                "where": "save_df_snapshot",
+                "stage": "final",
+                "error": str(e),
+            })
 
         # 9) Generate Email Summary, send email and log completed timestamp
         completed_at = utc_now_iso()
