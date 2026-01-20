@@ -550,7 +550,7 @@ def create_trend_strategy_log_space(df, ticker, mavg_start, mavg_end, mavg_steps
     z = z.clip(-4, 4)
 
     # Calculate the Percentile Rank based on CDF
-    rank = scipy.stats.norm.cdf(z) - 0.5  # centred 0↔±0.5
+    rank = scipy.stats.norm.cdf(z) - 0.5  # centered 0 ↔ ±0.5
 
     trend_continuous_signal_col = f'{ticker}_mavg_ribbon_slope'
     trend_continuous_signal_rank_col = f'{ticker}_mavg_ribbon_rank'
@@ -726,7 +726,7 @@ def generate_vol_of_vol_signal_log_space(df, ticker, t_1_close_price_col, log_st
             df[realized_log_returns_vol].rolling(coef_of_variation_window,
                                                  min_periods=coef_of_variation_window).mean().clip(lower=eps))
 
-    ## Calculate Robust Z-Score of the Coefficient of Varaition
+    ## Calculate Robust Z-Score of the Coefficient of Variation
     cov_rolling_median = df[f'{ticker}_coef_variation_vol'].rolling(vol_of_vol_z_score_window,
                                                                     min_periods=vol_of_vol_z_score_window).median()
     df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median'] = cov_rolling_median
@@ -734,9 +734,10 @@ def generate_vol_of_vol_signal_log_space(df, ticker, t_1_close_price_col, log_st
                         df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median']).abs()
                        .rolling(vol_of_vol_z_score_window, min_periods=vol_of_vol_z_score_window).median())
     df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median_abs_dev'] = cov_rolling_mad
-    df[f'{ticker}_vol_of_vol_robust_z_score'] = ((df[f'{ticker}_coef_variation_vol'] -
-                                                  df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median']) /
-                                                 (1.4826 * df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median_abs_dev']).clip(lower=eps))
+    df[f'{ticker}_vol_of_vol_robust_z_score'] = (
+            (df[f'{ticker}_coef_variation_vol'] - df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median']) /
+            (1.4826 * df[f'{ticker}_cov_vol_rolling_{vol_of_vol_z_score_window}_median_abs_dev']).clip(lower=eps)
+    )
     df[f'{ticker}_vol_of_vol_robust_z_score'] = (df[f'{ticker}_vol_of_vol_robust_z_score']
                                                  .replace([np.inf, -np.inf], 0.0).fillna(0.0).clip(lower=-3, upper=3))
 
@@ -1554,16 +1555,18 @@ def get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr_vol_of_vol(
 
     for ticker in ticker_list:
         # Create Column Names
-        # donchian_continuous_signal_col = f'{ticker}_donchian_continuous_signal'
-        # donchian_continuous_signal_rank_col = f'{ticker}_donchian_continuous_signal_rank'
-        trend_continuous_signal_col = f'{ticker}_mavg_ribbon_slope'
-        trend_continuous_signal_rank_col = f'{ticker}_mavg_ribbon_rank'
-        final_signal_col = f'{ticker}_final_signal'
         close_price_col = f'{ticker}_close'
         open_price_col = f'{ticker}_open'
-        rolling_r2_col = f'{ticker}_rolling_r_sqr'
-        # rolling_r2_enable_col = f'{ticker}_r2_enable'
+        trend_continuous_signal_col = f'{ticker}_mavg_ribbon_slope'
+        trend_continuous_signal_rank_col = f'{ticker}_mavg_ribbon_rank'
+        donchian_continuous_signal_col = f'{ticker}_donchian_continuous_signal'
+        donchian_continuous_signal_rank_col = f'{ticker}_donchian_continuous_signal_rank'
         final_weighted_additive_signal_col = f'{ticker}_final_weighted_additive_signal'
+        rolling_r2_col = f'{ticker}_rolling_r_sqr'
+        vol_of_vol_penalty_col = f'{ticker}_vol_of_vol_penalty'
+        regime_filter_col = f'{ticker}_regime_filter'
+        # rolling_r2_enable_col = f'{ticker}_r2_enable'
+        final_signal_col = f'{ticker}_final_signal'
 
         if pd.to_datetime(date_list[ticker]).date() > start_date:
             run_date = pd.to_datetime(date_list[ticker]).date()
@@ -1588,8 +1591,9 @@ def get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr_vol_of_vol(
             saved_file_end_date=saved_file_end_date)
 
         trend_cols = [close_price_col, open_price_col, trend_continuous_signal_col, trend_continuous_signal_rank_col,
-                      final_weighted_additive_signal_col,
-                      rolling_r2_col, final_signal_col]
+                      donchian_continuous_signal_col, donchian_continuous_signal_rank_col,
+                      final_weighted_additive_signal_col, rolling_r2_col, vol_of_vol_penalty_col,
+                      regime_filter_col, final_signal_col]
         df_trend = df_trend[trend_cols]
         trend_list.append(df_trend)
 

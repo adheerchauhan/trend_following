@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import datetime
 from datetime import datetime, timezone, timedelta
+from datetime import date as dt_date
 from typing import Iterable
 import argparse
 import json
@@ -389,12 +390,12 @@ def get_strategy_trend_signal(cfg):
 
     print('Generating Volatility Adjusted Trend Signal!!')
     ## Get Volatility Adjusted Trend Signal
-    df_signal = size_cont.get_volatility_adjusted_trend_signal_continuous(df_trend,
-                                                                          ticker_list=cfg['universe']['tickers'],
-                                                                          volatility_window=cfg['risk_and_sizing'][
-                                                                              'volatility_window'],
-                                                                          annual_trading_days=cfg['run'][
-                                                                              'annual_trading_days'])
+    df_signal = size_cont.get_volatility_adjusted_trend_signal_continuous(
+        df_trend,
+        ticker_list=cfg['universe']['tickers'],
+        volatility_window=cfg['risk_and_sizing']['volatility_window'],
+        annual_trading_days=cfg['run']['annual_trading_days']
+    )
 
     return df_signal
 
@@ -477,6 +478,9 @@ def refresh_cooldowns_from_stop_fills(
     fills_start = today_date - timedelta(days=lookback_days)
     recent_cutoff = today_date - timedelta(days=effective_recent_days - 1)  # e.g., if N=2, cutoff is (today - 1)
 
+    # normalize cutoff once
+    cutoff_date = recent_cutoff if isinstance(recent_cutoff, dt_date) else recent_cutoff.date()
+
     for ticker in tickers:
         try:
             fills = get_stop_fills_fn(
@@ -489,12 +493,14 @@ def refresh_cooldowns_from_stop_fills(
             # 'fills' is [(ts, price), ...] sorted ascending
             for ts, px in reversed(fills):
                 # recent STOP fill ⇒ start cooldown dated to fill date
-                if ts.date() >= recent_cutoff:
+                ts_date = ts.date()
+
+                if ts_date >= cutoff_date:
                     print('date > recent_cutoff')
                     state.start_cooldown(
                         state_path=state_file,
                         ticker=ticker,
-                        breach_date=ts.date(),
+                        breach_date=ts_date,
                         cooldown_counter_threshold=cooldown_counter_threshold,
                         note=f"stop_fill@{px}",
                         log_path=log_file
@@ -922,7 +928,8 @@ def get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_op
 
     ## Apply Scaling Factor with No Leverage
     gross_weight_sum = np.sum(np.abs(rb_weights))
-    cash_scaling_factor = 1.0 / np.maximum(gross_weight_sum, 1e-12)  # ∑ w ≤ 1  (long‑only)
+    # cash_scaling_factor = 1.0 / np.maximum(gross_weight_sum, 1e-12)  # ∑ w ≤ 1  (long‑only)
+    cash_scaling_factor = 1.0 if gross_weight_sum <= 1.0 else (1.0 / gross_weight_sum)
     final_scaling_factor = min(vol_scaling_factor, cash_scaling_factor)
 
     df.loc[date, 'target_vol_scaling_factor'] = vol_scaling_factor
@@ -962,6 +969,15 @@ def get_desired_trades_from_target_notional(df, date, ticker_list, current_posit
     est_fees = (transaction_cost_est + perf.estimate_fee_per_trade(passive_trade_rate))
 
     for ticker in ticker_list:
+        # --- DATA GATE: if today's market data is incomplete, do NOT trade this ticker ---
+        if f"{ticker}_data_ok" in df.columns and float(df.loc[date, f"{ticker}_data_ok"]) < 0.5:
+            desired_positions[ticker] = {
+                "new_trade_notional": 0.0,
+                "trade_fees": 0.0,
+                "reason": "stale_or_missing_ohlc_skip_trade"
+            }
+            continue
+
         ## Calculate the cash need from all new target positions
         target_notional = df.loc[date, f'{ticker}_target_notional']
         current_notional = df.loc[date, f'{ticker}_open_position_notional']
@@ -1198,11 +1214,45 @@ def get_desired_trades_by_ticker(client, cfg, date):
             f'{ticker}_sleeve_risk_multiplier': 1.0,
             f'{ticker}_sleeve_risk_adj_weights': 0.0,
             f'{ticker}_event': pd.Series(pd.NA, index=df.index, dtype="string"),
+            f'{ticker}_data_ok': 1.0
         })
 
     df = ensure_cols(df, col_defaults)
     ord_cols = size_bin.reorder_columns_by_ticker(df.columns, ticker_list)
     df = df[ord_cols]
+
+    # --- Data-quality gate (per ticker): if today's OHLC is missing, freeze signal and skip trades later ---
+    for ticker in ticker_list:
+        req = [f"{ticker}_open", f"{ticker}_high", f"{ticker}_low", f"{ticker}_close"]
+        req = [c for c in req if c in df.columns]
+
+        ok = False  # default to safe fail
+
+        if req and (date in df.index):
+            vals = df.loc[date, req]
+
+            # If duplicate index entries, .loc returns a DataFrame
+            if isinstance(vals, pd.DataFrame):
+                vals = vals.iloc[0]
+
+            vals_num = pd.to_numeric(vals, errors="coerce")
+            ok = vals_num.notna().all() and np.isfinite(vals_num.to_numpy(dtype=float)).all()
+
+        df.loc[date, f"{ticker}_data_ok"] = float(ok)
+
+        if not ok:
+            # Log a per-ticker event marker in your DF
+            df.loc[date, f"{ticker}_event"] = "missing_ohlc_freeze"
+
+            # Carry-forward the key signal used for sizing
+            cols_to_carry = [
+                f"{ticker}_final_weighted_additive_signal",
+                f"{ticker}_final_signal",
+                f"{ticker}_vol_adjusted_trend_signal",
+            ]
+            for c in cols_to_carry:
+                if c in df.columns:
+                    df.loc[date, c] = df.loc[previous_date, c]
 
     ## Portfolio Level Cash and Positions are all set to 0
     df['daily_portfolio_volatility'] = 0.0
@@ -1432,20 +1482,36 @@ def update_trailing_stop_chandelier(
     buffer_bps=50,
 ):
     """
-    SIMPLE STOP POLICY (no force flags, no reserve math):
-      - If NO position: cancel any existing strategy stop orders (if present); return.
-      - If position > 0: cancel all existing strategy stop orders; place exactly ONE new stop
-        at today's computed Chandelier stop price sized to LIVE position qty.
+      Production-safe STOP POLICY (preview-first, reserve-aware) + Policy A fallback:
 
-    Uses df ONLY for chandelier stop calculation.
-    Uses Coinbase ONLY for live qty/mid and live open stop orders.
-    """
+        - If NO position:
+            - cancel any existing STRATEGY stop orders (if present); return.
 
-    # --- df needed to compute chandelier stop ---
+        - If position > 0:
+            - compute desired stop (SELL stop): round DOWN + cap strictly below live mid (proxy for last trade)
+            - build size_for_stop from LIVE position qty
+            - LIST existing STRATEGY stops
+            - PREVIEW new stop *before* cancelling anything
+                - if preview fails and an existing stop exists:
+                      keep existing stop(s) -> no change (do NOT cancel)
+                - if preview fails and no existing stop exists:
+                      Policy A emergency retry ladder (more conservative stops) + ALERT marker
+            - if preview succeeds:
+                - cancel existing STRATEGY stops
+                - place new stop
+                - verify order status
+
+      Uses df ONLY for chandelier stop computation.
+      Uses Coinbase ONLY for live qty/mid and live open stop orders.
+      """
+
+    ## Ensure Dataframe exists, this is required to compute the Chandelier Stop
     if df is None or df.empty:
-        return {"ok": False, "action": "skip", "reason": "df_required_for_chandelier_stop"}
+        return {"ok": False,
+                "action": "skip",
+                "reason": "df_required_for_chandelier_stop"}
 
-    # Normalize df index for indicator computation
+    ## Normalize the Dataframe index for indicator computation
     if not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.to_datetime(df.index, errors="coerce", utc=True).tz_localize(None)
     elif df.index.tz is not None:
@@ -1453,23 +1519,31 @@ def update_trailing_stop_chandelier(
     df.index = df.index.normalize()
     df = df.sort_index()
 
+    ## Check to see if processing date is in the dataframe
     target = pd.Timestamp(date).normalize()
     if target not in df.index:
         idx = df.index
         pos = idx.searchsorted(target, side="right") - 1
         if pos < 0:
-            return {"ok": False, "action": "skip", "reason": f"date {target.date()} before first data {idx[0].date()}"}
+            return {"ok": False,
+                    "action": "skip",
+                    "reason": f"date {target.date()} before first data {idx[0].date()}"}
         date = idx[pos]
     else:
         date = target
 
-    # --- live specs (increments/mins) ---
+    ## Get the live specs for the ticker
     specs = cn.get_product_meta(client, product_id=ticker)
     tick = float(specs["price_increment"])
     base_inc = float(specs["base_increment"])
     quote_min = float(specs.get("quote_min_size") or 0.0)
 
-    # --- compute today's desired stop from historical data ---
+    ## Pull live position quantity and mid-price for the ticker
+    pos_map = (cn.get_current_positions_from_portfolio(client, [ticker], portfolio_name) or {}).get(ticker, {}) or {}
+    pos_qty = float(pos_map.get("ticker_qty", 0.0) or 0.0)
+    mid_px = float(pos_map.get("ticker_mid_price", 0.0) or 0.0)
+
+    ## Compute today's stop price
     stop_today = float(
         chandelier_stop_long(
             date,
@@ -1479,51 +1553,80 @@ def update_trailing_stop_chandelier(
             atr_multiplier,
         )
     )
-    desired_stop = cn.round_to_increment(stop_today, tick)
+    desired_stop = cn.round_down(stop_today, tick)
 
-    # --- pull LIVE qty + mid price ---
-    pos_map = (cn.get_current_positions_from_portfolio(client, [ticker], portfolio_name) or {}).get(ticker, {}) or {}
-    pos_qty = float(pos_map.get("ticker_qty", 0.0) or 0.0)
-    mid_px = float(pos_map.get("ticker_mid_price", 0.0) or 0.0)
+    ## Require a live mid-price to cap stop safely when in-position (if pos>0)
+    ## If no position, mid_px isn't needed.
+    if pos_qty > 0 and not (np.isfinite(mid_px) and mid_px > 0):
+        return {"ok": False,
+                "action": "skip",
+                "reason": "no_live_mid_price",
+                "pos_qty": float(pos_qty)
+                }
 
-    # Helper: cancel all existing STRATEGY stops for this ticker
-    def _cancel_strategy_stops():
-        cancelled = 0
+    ## Coinbase requires stop_price < last trade price; use mid_px as proxy with a cushion
+    ## Cap stop to a few ticks below mid to avoid equality / micro-moves.
+    if pos_qty > 0:
+        cap = mid_px - (2.0 * tick)
+        desired_stop = min(desired_stop, cap)
+        desired_stop = cn.round_down(desired_stop, tick)
+
+        # Extra strictness: ensure < mid_px even after rounding / float weirdness
+        if desired_stop >= (mid_px - tick):
+            desired_stop = cn.round_down(mid_px - (3.0 * tick), tick)
+
+    ## Sanity Guard: if cap <= 0 or desired_stop becomes non-positive, skip (or force exit)
+    if not (np.isfinite(desired_stop) and desired_stop > 0):
+        return {"ok": False,
+                "action": "skip",
+                "reason": "invalid_desired_stop",
+                "desired_stop": float(desired_stop)}
+
+    ## Helper: cancel all existing STRATEGY stops for this ticker
+    def _list_strategy_stops():
         open_stops = cn.list_open_stop_orders(client, product_id=ticker) or []
+        strat = []
         for o in open_stops:
             coid = str(o.get("client_order_id") or "")
             if client_id_prefix and not coid.startswith(client_id_prefix):
                 continue
+            strat.append(o)
+        return strat
+
+    def _cancel_orders(order_list):
+        cancelled = 0
+        for o in order_list:
             oid = o.get("order_id")
             if oid:
                 cn.cancel_order_by_id(client, order_id=oid)
                 cancelled += 1
         return cancelled
 
-    # --- if no position: cancel stops and exit ---
+    ## If no position exists, look for and cancel all existing Stop Loss orders for this ticker and return
     if pos_qty <= 0:
-        try:
-            cancelled = _cancel_strategy_stops()
-        except Exception as e:
-            return {"ok": False, "action": "cancel_failed", "reason": "no_position", "error": str(e)}
+        existing_stops = _list_strategy_stops()
+        cancelled = 0
+        if existing_stops:
+            try:
+                cancelled = _cancel_orders(existing_stops)
+            except Exception as e:
+                return {"ok": False,
+                        "action": "cancel_failed",
+                        "reason": "no_position",
+                        "error": str(e)
+                        }
 
-        # record only (optional)
+        # record only
         df.loc[date, f"{ticker}_stop_loss"] = float(desired_stop)
-        return {"ok": True, "action": "cancelled" if cancelled else "skip", "reason": "no_position", "cancelled": cancelled}
+        return {"ok": True,
+                "action": "cancelled" if cancelled else "skip",
+                "reason": "no_position",
+                "cancelled": cancelled
+                }
 
-    if not (np.isfinite(mid_px) and mid_px > 0):
-        return {"ok": False, "action": "skip", "reason": "no_live_mid_price", "pos_qty": float(pos_qty)}
-
-    # --- cancel existing stops FIRST (simple rule: one stop total) ---
-    try:
-        cancelled = _cancel_strategy_stops()
-    except Exception as e:
-        # still continue; we may place a new stop anyway
-        cancelled = None
-        print(f"[warn] cancel stops failed for {ticker}: {e}", flush=True)
-
-    # --- size new stop off LIVE qty ---
+    ## Get the position quantity to be protected by the stop loss order
     size_for_stop = cn.round_down(pos_qty, base_inc)
+    # Deal with zero or negative quantities
     if size_for_stop <= 0:
         df.loc[date, f"{ticker}_stop_loss"] = float(desired_stop)
         return {
@@ -1531,11 +1634,10 @@ def update_trailing_stop_chandelier(
             "action": "no_change",
             "reason": "size_rounds_to_zero",
             "pos_qty": float(pos_qty),
-            "base_increment": float(base_inc),
-            "cancelled": cancelled,
+            "base_increment": float(base_inc)
         }
 
-    # --- enforce quote min notional using LIVE mid ---
+    ## Enforce quote min notional using the live mid-price
     if quote_min and (size_for_stop * mid_px) < quote_min:
         # try rounding up (do not exceed position qty)
         size_up = cn.round_up(quote_min / mid_px, base_inc)
@@ -1551,14 +1653,17 @@ def update_trailing_stop_chandelier(
                 "quote_min_size": float(quote_min),
                 "mid_px": float(mid_px),
                 "size_for_stop": float(size_for_stop),
-                "pos_qty": float(pos_qty),
-                "cancelled": cancelled,
+                "pos_qty": float(pos_qty)
             }
 
-    # --- build deterministic client_order_id ---
+    # --- Existing strategy stops (reserve-aware) ---
+    existing_stops = _list_strategy_stops()
+    has_existing_stop = len(existing_stops) > 0
+
+    ## Build a deterministic client order id
     client_order_id = f"{client_id_prefix}{ticker}-{date:%Y%m%d}-{int(round(desired_stop / tick))}"
 
-    # --- preview new stop ---
+    ## Preview the Stop Loss Limit order for the ticker
     pv = cn.place_stop_limit_order(
         client=client,
         product_id=ticker,
@@ -1573,25 +1678,157 @@ def update_trailing_stop_chandelier(
         quote_min_size=specs.get("quote_min_size"),
     )
     pv_d = cn._as_dict(pv)
-    errs = pv_d.get("errs") or []
+    errs = pv_d.get("errs") or []  # this will hold all errors from the preview
 
     if errs:
-        # IMPORTANT: you just cancelled stops. If preview fails, you risk leaving it unprotected.
-        # Minimal safe behavior: report loudly so you can intervene; optionally restore previous stop if you track it.
-        df.loc[date, f"{ticker}_stop_loss"] = float(desired_stop)
-        return {
-            "ok": False,
-            "action": "no_change",
-            "reason": "preview_error_after_cancel",
-            "preview_errors": errs,
-            "desired_stop": float(desired_stop),
-            "pos_qty": float(pos_qty),
-            "size_for_stop": float(size_for_stop),
-            "mid_px": float(mid_px),
-            "cancelled": cancelled,
-        }
+        ## Identify the causes of the preview errors
+        err_text = " | ".join([str(e) for e in errs])
+        # Error due to insufficient funds likely caused by an existing stop loss order
+        reserve_like = any(
+            ("INSUFFICIENT_FUNDS" in str(e)) or ("insufficient" in str(e).lower())
+            for e in errs
+        )
+        # Error as the stop price is above the current mark due to price drift while orders were being placed
+        price_like = any(
+            ("ABOVE_LAST_TRADE_PRICE" in str(e)) or ("STOP_PRICE" in str(e)) or ("last trade" in str(e).lower())
+            for e in errs
+        )
 
-    # --- place live stop (single stop) ---
+        df.loc[date, f"{ticker}_stop_loss"] = float(desired_stop)
+
+        ## If we already have a stop and preview fails due to reserves, keep existing protection.
+        if has_existing_stop and reserve_like:
+            return {
+                "ok": True,
+                "action": "no_change",
+                "reason": "preview_insufficient_funds_keep_existing",
+                "preview_errors": errs,
+                "preview_error_text": err_text,
+                "desired_stop": float(desired_stop),
+                "pos_qty": float(pos_qty),
+                "size_for_stop": float(size_for_stop),
+                "mid_px": float(mid_px),
+                "cancelled": 0,
+                "has_existing_stop": True,
+            }
+
+        ## For price-like errors (e.g., stop >= last trade), do NOT cancel anything. Keep existing if present.
+        if has_existing_stop and price_like:
+            return {
+                "ok": True,
+                "action": "no_change",
+                "reason": "preview_price_error_keep_existing",
+                "preview_errors": errs,
+                "preview_error_text": err_text,
+                "desired_stop": float(desired_stop),
+                "pos_qty": float(pos_qty),
+                "size_for_stop": float(size_for_stop),
+                "mid_px": float(mid_px),
+                "cancelled": 0,
+                "has_existing_stop": True,
+            }
+
+        ## There is no existing stop, and the preview of a stop loss has failed
+        ## We will try a stop loss ladder to attempt and create an acceptable stop price
+        def _preview(stop_px: float, coid: str):
+            pv = cn.place_stop_limit_order(
+                client=client,
+                product_id=ticker,
+                side="SELL",
+                stop_price=float(stop_px),
+                size=float(size_for_stop),
+                client_order_id=coid,
+                buffer_bps=buffer_bps,
+                preview=True,
+                price_increment=specs["price_increment"],
+                base_increment=specs["base_increment"],
+                quote_min_size=specs.get("quote_min_size"),
+            )
+            pv_d = cn._as_dict(pv)
+            return pv_d.get("errs") or []
+
+        if not has_existing_stop:
+            df.loc[date, f"{ticker}_event"] = "STOP_ALERT_PREVIEW_FAILED_NO_EXISTING_STOP"
+
+            # Ladder candidates (conservative). Keep it small and deterministic.
+            candidates = []
+
+            # 1) original desired_stop (already failed)
+            candidates.append(float(desired_stop))
+
+            # 2) 5 ticks below mid
+            candidates.append(float(cn.round_down(mid_px - 5.0 * tick, tick)))
+
+            # 3) 100 bps below mid
+            candidates.append(float(cn.round_down(mid_px * (1.0 - 0.01), tick)))
+
+            # sanitize: must be finite, positive, and strictly below mid by at least 1 tick
+            cand_clean = []
+            for s in candidates:
+                if not (np.isfinite(s) and s > 0):
+                    continue
+                if s >= (mid_px - tick):
+                    continue
+                # de-dup while preserving order
+                if (len(cand_clean) == 0) or (abs(s - cand_clean[-1]) > 1e-18):
+                    cand_clean.append(s)
+
+            chosen = None
+            chosen_errs = errs
+            for s_try in cand_clean:
+                # unique coid per attempt (still deterministic)
+                coid_try = f"{client_id_prefix}{ticker}-{date:%Y%m%d}-{int(round(s_try / tick))}"
+                e_try = _preview(s_try, coid_try)
+                if not e_try:
+                    chosen = (s_try, coid_try)
+                    chosen_errs = []
+                    break
+                chosen_errs = e_try
+
+            if chosen is None:
+                ## There is no existing stop, and we cannot create protection right now.
+                ## THIS IS A HIGH ALERT, COULD HAVE EXISTING POSITION WITH NO PROTECTION!!!
+                # (Your higher-level system should alert; optionally implement emergency exit policy elsewhere.)
+                return {
+                    "ok": False,
+                    "action": "no_change",
+                    "reason": "preview_error_no_existing_stop_alert",
+                    "preview_errors": errs,
+                    "preview_error_text": err_text,
+                    "last_retry_errors": chosen_errs,
+                    "desired_stop": float(desired_stop),
+                    "pos_qty": float(pos_qty),
+                    "size_for_stop": float(size_for_stop),
+                    "mid_px": float(mid_px),
+                    "cancelled": 0,
+                    "has_existing_stop": False,
+                }
+
+            # Adopt chosen stop and continue as if preview passed
+            desired_stop, client_order_id = chosen
+            df.loc[date, f"{ticker}_stop_loss"] = float(desired_stop)
+
+    ## Preview Passed, now we can cancel and place a new stop loss order
+    cancelled = 0
+    if existing_stops:
+        try:
+            cancelled = _cancel_orders(existing_stops)
+        except Exception as e:
+            # If we can't cancel, avoid placing a second stop (reserve/dup risk).
+            return {
+                "ok": False,
+                "action": "no_change",
+                "reason": "cancel_failed_keep_existing",
+                "error": str(e),
+                "desired_stop": float(desired_stop),
+                "pos_qty": float(pos_qty),
+                "size_for_stop": float(size_for_stop),
+                "mid_px": float(mid_px),
+                "cancelled": None,
+                "has_existing_stop": True,
+            }
+
+    ## Place the Live Stop Loss Order for ticker
     cr = cn.place_stop_limit_order(
         client=client,
         product_id=ticker,
@@ -1606,8 +1843,26 @@ def update_trailing_stop_chandelier(
         quote_min_size=specs.get("quote_min_size"),
     )
     cr_d = cn._as_dict(cr)
+    ## If the create call itself returned errors, surface them cleanly
+    cr_errs = cr_d.get("errs") or []
+    if cr_errs:
+        df.loc[date, f"{ticker}_event"] = "STOP_ALERT_CREATE_FAILED"
+        return {
+            "ok": False,
+            "action": "not_open",
+            "reason": "create_failed",
+            "create_errors": cr_errs,
+            "desired_stop": float(desired_stop),
+            "pos_qty": float(pos_qty),
+            "size_for_stop": float(size_for_stop),
+            "mid_px": float(mid_px),
+            "cancelled": cancelled,
+            "has_existing_stop": bool(has_existing_stop),
+        }
+
     new_order_id = cr_d.get("response", {}).get("order_id") or cr_d.get("order_id")
 
+    ## Stop Loss Order Status to ensure Coinbase accepted the order
     order_status = None
     cancel_message = None
     reject_message = None
@@ -1638,9 +1893,11 @@ def update_trailing_stop_chandelier(
         "reject_message": reject_message,
         "create_time": create_time,
         "desired_stop": float(desired_stop),
+        "stop_today": float(stop_today),
         "pos_qty": float(pos_qty),
         "size_for_stop": float(size_for_stop),
         "mid_px": float(mid_px),
+        "has_existing_stop": bool(has_existing_stop),
     }
 
 
@@ -1867,7 +2124,26 @@ def main():
                                 {"ts": utc_now_iso(), "stage": "post_exit_stop_cancel", **cancel_info})
 
         # 8) Update trailing stops (Chandelier)
+        today_ts = pd.Timestamp(today).normalize()
+
         for ticker in ticker_list:
+            # --- STOP UPDATE GATE: if market data is incomplete, DO NOT cancel/replace stops ---
+            if f"{ticker}_data_ok" in df.columns:
+                try:
+                    ok = float(df.loc[today_ts, f"{ticker}_data_ok"])
+                except Exception:
+                    ok = 1.0  # fail open; don't block if we can't read it
+
+                if ok < 0.5:
+                    stop_loss_dict = {"ok": True, "action": "skip", "reason": "missing_ohlc_skip_stop_update"}
+                    stop_results[ticker] = stop_loss_dict
+                    write_jsonl(STOP_UPDATE_LOG, {
+                        "ts": utc_now_iso(),
+                        "ticker": ticker,
+                        **stop_loss_dict
+                    })
+                    continue
+
             try:
                 stop_loss_dict = update_trailing_stop_chandelier(
                     client=client, df=df, ticker=ticker, date=today, portfolio_name=portfolio_name,
