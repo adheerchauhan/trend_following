@@ -59,7 +59,7 @@ def risk_budget_by_sleeve_optimized_by_signal(
     if len(active_sleeves) == 1:
         return np.asarray(signals, dtype=float), risk_multiplier
 
-    ## Renormalize budgets over active sleeves only (optional but helpful)
+    ## Re-normalize budgets over active sleeves only (optional but helpful)
     total_budget_active = sum(sleeve_budgets[s]['weight'] for s in active_sleeves)
     eff_budget = {}
     for s in sleeves:
@@ -79,7 +79,7 @@ def risk_budget_by_sleeve_optimized_by_signal(
         if np.allclose(sleeve_risk_adj_weights, 0):
             return sleeve_risk_adj_weights, risk_multiplier
 
-        ## Calculate the Portfolio Variance and Standard Deviaition for today given the current weights
+        ## Calculate the Portfolio Variance and Standard Deviation for today given the current weights
         sigma2 = float(sleeve_risk_adj_weights @ daily_cov_matrix @ sleeve_risk_adj_weights)
         sigma = np.sqrt(sigma2)
 
@@ -146,16 +146,15 @@ def risk_budget_by_sleeve_optimized_by_signal(
     return sleeve_risk_adj_weights, risk_multiplier
 
 
-def get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_opt(
-        df, cov_matrix, date, ticker_list,
-        daily_target_volatility,
-        total_portfolio_value_upper_limit,
-        ticker_to_sleeve, sleeve_budgets,
-        risk_max_iterations,
-        risk_sleeve_budget_tolerance,
-        risk_optimizer_step, risk_min_signal,
-        sleeve_risk_mode):
-
+def get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_opt(df, cov_matrix, date, ticker_list,
+                                                                                  daily_target_volatility,
+                                                                                  total_portfolio_value_upper_limit,
+                                                                                  ticker_to_sleeve, sleeve_budgets,
+                                                                                  risk_max_iterations,
+                                                                                  risk_sleeve_budget_tolerance,
+                                                                                  risk_optimizer_step, risk_min_signal,
+                                                                                  sleeve_risk_mode):
+    eps = 1e-12
     ## Scale weights of positions to ensure the portfolio is in line with the target volatility
     unscaled_weight_cols = [f'{ticker}_vol_adjusted_trend_signal' for ticker in ticker_list]
     scaled_weight_cols = [f'{ticker}_target_vol_normalized_weight' for ticker in ticker_list]
@@ -219,8 +218,19 @@ def get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_op
         vol_scaling_factor = 0
 
     ## Apply Scaling Factor with No Leverage
+    # gross_weight_sum = np.sum(np.abs(rb_weights))
+    # cash_scaling_factor = 1.0 / np.maximum(gross_weight_sum, 1e-12)  # ∑ w ≤ 1  (long‑only)
+    # final_scaling_factor = min(vol_scaling_factor, cash_scaling_factor)
+
+    # Also cap leverage explicitly (you said long-only, no leverage)
+    vol_scaling_factor = min(vol_scaling_factor, 1.0)
+
+    ## Apply Scaling Factor with No Leverage
     gross_weight_sum = np.sum(np.abs(rb_weights))
-    cash_scaling_factor = 1.0 / np.maximum(gross_weight_sum, 1e-12)  # ∑ w ≤ 1  (long‑only)
+
+    # Only scale DOWN to respect gross<=1. Never scale UP to fill cash.
+    cash_scaling_factor = 1.0 if gross_weight_sum <= 1.0 else (1.0 / max(gross_weight_sum, eps))
+
     final_scaling_factor = min(vol_scaling_factor, cash_scaling_factor)
 
     df.loc[date, 'target_vol_scaling_factor'] = vol_scaling_factor
@@ -228,6 +238,195 @@ def get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_op
     df.loc[date, 'final_scaling_factor'] = final_scaling_factor
 
     # Scale the weights to target volatility
+    scaled_weights = rb_weights * final_scaling_factor
+    df.loc[date, scaled_weight_cols] = scaled_weights
+
+    ## Calculate the target notional and size
+    target_notionals = scaled_weights * total_portfolio_value_upper_limit
+    df.loc[date, target_notional_cols] = target_notionals
+    target_sizes = target_notionals / df.loc[date, t_1_price_cols].values
+
+    for i, ticker in enumerate(ticker_list):
+        df.loc[date, f'{ticker}_target_size'] = target_sizes[i]
+
+    total_target_notional = target_notionals.sum()
+    df.loc[date, 'total_target_notional'] = total_target_notional
+
+    return df
+
+
+def get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_opt_w_conviction(
+        df, cov_matrix, date, ticker_list,
+        daily_target_volatility,
+        total_portfolio_value_upper_limit,
+        ticker_to_sleeve, sleeve_budgets,
+        risk_max_iterations,
+        risk_sleeve_budget_tolerance,
+        risk_optimizer_step, risk_min_signal,
+        sleeve_risk_mode,
+# ----------------- NEW: conviction / investedness controls -----------------
+        conv_n0=1.5,                 # breadth scalar = 0 when N_eff <= n0
+        conv_n1=4.0,                 # breadth scalar = 1 when N_eff >= n1
+        conv_s0=0.005,               # strength scalar = 0 when gross_raw <= s0  (TUNE)
+        conv_s1=0.065,               # strength scalar = 1 when gross_raw >= s1  (TUNE)
+        conv_G_min=0.0,              # minimum gross exposure
+        conv_G_max=1.0,              # maximum gross exposure (long-only, no leverage)
+        conv_single_name_gross_cap=0.60,  # if N_eff < 2, cap gross exposure at this
+        conv_enable=True             # set False to disable conviction logic
+):
+
+    ## Scale weights of positions to ensure the portfolio is in line with the target volatility
+    t_1_price_cols = [f'{ticker}_t_1_close' for ticker in ticker_list]
+    returns_cols = [f'{ticker}_t_1_close_pct_returns' for ticker in ticker_list]
+    unscaled_weight_cols = [f'{ticker}_vol_adjusted_trend_signal' for ticker in ticker_list]
+    sleeve_risk_multiplier_cols = [f'{ticker}_sleeve_risk_multiplier' for ticker in ticker_list]
+    sleeve_risk_adj_cols = [f'{ticker}_sleeve_risk_adj_weights' for ticker in ticker_list]
+    conviction_adj_cols = [f'{ticker}_conviction_adj_weights' for ticker in ticker_list]
+    scaled_weight_cols = [f'{ticker}_target_vol_normalized_weight' for ticker in ticker_list]
+    target_notional_cols = [f'{ticker}_target_notional' for ticker in ticker_list]
+
+    if date not in df.index or date not in cov_matrix.index:
+        raise ValueError(f"Date {date} not found in DataFrame or covariance matrix index.")
+
+    ## Iterate through each day and get the unscaled weights and calculate the daily covariance matrix
+    daily_weights = df.loc[date, unscaled_weight_cols].values
+    daily_cov_matrix = cov_matrix.loc[date].loc[returns_cols, returns_cols].values
+
+    ## Apply the Sleeve Risk Adjusted Multiplier to the Daily Weights
+    if ticker_to_sleeve is not None and sleeve_budgets is not None:
+        rb_weights, sleeve_risk_multiplier = risk_budget_by_sleeve_optimized_by_signal(
+            signals=daily_weights,
+            daily_cov_matrix=daily_cov_matrix,
+            ticker_list=ticker_list,
+            ticker_to_sleeve=ticker_to_sleeve,
+            sleeve_budgets=sleeve_budgets,
+            max_iter=risk_max_iterations,
+            tol=risk_sleeve_budget_tolerance,
+            step=risk_optimizer_step,
+            min_signal_eps=risk_min_signal,
+            mode=sleeve_risk_mode
+        )
+        sleeve_risk_multiplier = np.array(
+            [float(sleeve_risk_multiplier.get(ticker_to_sleeve[t], 1.0)) for t in ticker_list],
+            dtype=float
+        )
+    else:
+        rb_weights = daily_weights.copy()
+        sleeve_risk_multiplier = np.ones(len(ticker_list))
+
+    rb_weights = np.asarray(rb_weights, dtype=float)
+    rb_weights = np.clip(rb_weights, 0.0, None)
+    sleeve_risk_multiplier = np.asarray(sleeve_risk_multiplier, dtype=float)
+
+    df.loc[date, sleeve_risk_adj_cols] = rb_weights
+    df.loc[date, sleeve_risk_multiplier_cols] = sleeve_risk_multiplier
+
+    ## If all weights are zero, we can just zero out and return
+    eps = 1e-12
+    if np.allclose(rb_weights, 0) or float(np.sum(rb_weights)) <= eps:
+        df.loc[date, scaled_weight_cols] = 0.0
+        df.loc[date, target_notional_cols] = 0.0
+        df.loc[date, sleeve_risk_adj_cols] = 0.0
+        df.loc[date, conviction_adj_cols] = 0.0
+        df.loc[date, 'daily_portfolio_volatility'] = 0.0
+        df.loc[date, 'target_vol_scaling_factor'] = 0.0
+        df.loc[date, 'cash_scaling_factor'] = 1.0
+        df.loc[date, 'final_scaling_factor'] = 0.0
+        df.loc[date, 'total_target_notional'] = 0.0
+
+        # diagnostics
+        df.loc[date, 'conv_gross_raw'] = 0.0
+        df.loc[date, 'conv_n_eff'] = 0.0
+        df.loc[date, 'conv_breadth_scalar'] = 0.0
+        df.loc[date, 'conv_strength_scalar'] = 0.0
+        df.loc[date, 'conv_target_gross'] = 0.0
+        return df
+
+    # =========================================================================
+    # ---------- NEW: Conviction / Investedness (target gross exposure) ----------
+    # =========================================================================
+    if conv_enable:
+        w = rb_weights.copy()
+        gross_raw = float(np.sum(w))  # long-only, so abs not needed
+
+        # unit-gross distribution (cross-sectional allocation)
+        w_unit = w / max(gross_raw, eps)
+
+        # effective number of names (breadth / concentration)
+        n_eff = 1.0 / float(np.sum(w_unit ** 2) + eps)
+
+        # breadth scalar (0..1)
+        breadth_scalar = (n_eff - float(conv_n0)) / max((float(conv_n1) - float(conv_n0)), eps)
+        breadth_scalar = float(np.clip(breadth_scalar, 0.0, 1.0))
+
+        # strength scalar (0..1) based on gross_raw (TUNE s0/s1 from backtest distribution)
+        strength_scalar = (gross_raw - float(conv_s0)) / max((float(conv_s1) - float(conv_s0)), eps)
+        strength_scalar = float(np.clip(strength_scalar, 0.0, 1.0))
+
+        # target gross exposure (investedness combining strength and breadth factors)
+        target_gross = float(conv_G_min) + (float(conv_G_max) - float(conv_G_min)) * (
+                    breadth_scalar * strength_scalar)
+
+        # optional: prevent "1-name portfolio at full gross"
+        if n_eff < 2.0:
+            target_gross = min(target_gross, float(conv_single_name_gross_cap))
+
+        # apply investedness to the weights (still long-only)
+        rb_weights = w_unit * target_gross
+        rb_weights = np.clip(rb_weights, 0.0, None)
+
+        # store diagnostics (very helpful for debugging)
+        df.loc[date, 'conv_gross_raw'] = gross_raw
+        df.loc[date, 'conv_n_eff'] = float(n_eff)
+        df.loc[date, 'conv_breadth_scalar'] = float(breadth_scalar)
+        df.loc[date, 'conv_strength_scalar'] = float(strength_scalar)
+        df.loc[date, 'conv_target_gross'] = float(target_gross)
+    else:
+        # store diagnostics (disabled)
+        df.loc[date, 'conv_gross_raw'] = float(np.sum(rb_weights))
+        df.loc[date, 'conv_n_eff'] = np.nan
+        df.loc[date, 'conv_breadth_scalar'] = np.nan
+        df.loc[date, 'conv_strength_scalar'] = np.nan
+        df.loc[date, 'conv_target_gross'] = float(np.sum(rb_weights))
+
+    # if conviction collapses to ~0, treat as flat
+    if np.allclose(rb_weights, 0) or float(np.sum(rb_weights)) <= eps:
+        df.loc[date, scaled_weight_cols] = 0.0
+        df.loc[date, target_notional_cols] = 0.0
+        df.loc[date, sleeve_risk_adj_cols] = 0.0
+        df.loc[date, conviction_adj_cols] = 0.0
+        df.loc[date, 'daily_portfolio_volatility'] = 0.0
+        df.loc[date, 'target_vol_scaling_factor'] = 0.0
+        df.loc[date, 'cash_scaling_factor'] = 1.0
+        df.loc[date, 'final_scaling_factor'] = 0.0
+        df.loc[date, 'total_target_notional'] = 0.0
+        return df
+
+    ## Calculate the portfolio volatility based on the new weights
+    daily_portfolio_volatility = size_bin.calculate_portfolio_volatility(rb_weights, daily_cov_matrix)
+    df.loc[date, 'daily_portfolio_volatility'] = daily_portfolio_volatility
+    if daily_portfolio_volatility > 0:
+        vol_scaling_factor = daily_target_volatility / daily_portfolio_volatility
+    else:
+        vol_scaling_factor = 0
+
+    # Also cap leverage explicitly (you said long-only, no leverage)
+    vol_scaling_factor = min(vol_scaling_factor, 1.0)
+
+    ## Apply Scaling Factor with No Leverage
+    gross_weight_sum = np.sum(np.abs(rb_weights))
+
+    # Only scale DOWN to respect gross<=1. Never scale UP to fill cash.
+    cash_scaling_factor = 1.0 if gross_weight_sum <= 1.0 else (1.0 / max(gross_weight_sum, eps))
+
+    final_scaling_factor = min(vol_scaling_factor, cash_scaling_factor)
+
+    df.loc[date, 'target_vol_scaling_factor'] = vol_scaling_factor
+    df.loc[date, 'cash_scaling_factor'] = cash_scaling_factor
+    df.loc[date, 'final_scaling_factor'] = final_scaling_factor
+
+    # Scale the weights to target volatility
+    df.loc[date, conviction_adj_cols] = rb_weights ## Conviction Adjusted Weights
     scaled_weights = rb_weights * final_scaling_factor
     df.loc[date, scaled_weight_cols] = scaled_weights
 
@@ -255,7 +454,16 @@ def get_target_volatility_daily_portfolio_positions_with_risk_multiplier_sleeve_
         annual_trading_days=365, use_specific_start_date=False,
         signal_start_date=None, ticker_to_sleeve=None,
         sleeve_budgets=None, risk_max_iterations=None, risk_sleeve_budget_tolerance=None,
-        risk_optimizer_step=None, risk_min_signal=None, sleeve_risk_mode=None):
+        risk_optimizer_step=None, risk_min_signal=None, sleeve_risk_mode=None,
+        # conv_n0=1.5,                 # breadth scalar = 0 when N_eff <= n0
+        # conv_n1=4.0,                 # breadth scalar = 1 when N_eff >= n1
+        # conv_s0=0.005,               # strength scalar = 0 when gross_raw <= s0  (TUNE)
+        # conv_s1=0.065,               # strength scalar = 1 when gross_raw >= s1  (TUNE)
+        # conv_G_min=0.0,              # minimum gross exposure
+        # conv_G_max=1.0,              # maximum gross exposure (long-only, no leverage)
+        # conv_single_name_gross_cap=0.60,  # if N_eff < 2, cap gross exposure at this
+        # conv_enable=True             # set False to disable conviction logic
+):
 
     # ensure DatetimeIndex (tz-naive), normalized, sorted
     if not isinstance(df.index, pd.DatetimeIndex):
@@ -341,8 +549,11 @@ def get_target_volatility_daily_portfolio_positions_with_risk_multiplier_sleeve_
         df = get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_opt(
             df, cov_matrix, date, ticker_list, daily_target_volatility,
             total_portfolio_value_upper_limit, ticker_to_sleeve, sleeve_budgets,
-            risk_max_iterations, risk_sleeve_budget_tolerance,
-            risk_optimizer_step, risk_min_signal, sleeve_risk_mode)
+            risk_max_iterations, risk_sleeve_budget_tolerance, risk_optimizer_step,
+            risk_min_signal, sleeve_risk_mode,
+            # conv_n0, conv_n1, conv_s0,
+            # conv_s1, conv_G_min, conv_G_max, conv_single_name_gross_cap, conv_enable
+        )
 
         ## Adjust Positions for Cash Available
         desired_positions, cash_shrink_factor = size_cont.get_cash_adjusted_desired_positions(
@@ -372,7 +583,16 @@ def apply_target_volatility_position_sizing_continuous_strategy_with_rolling_r_s
         use_coinbase_data=True, use_saved_files=True, saved_file_end_date='2025-07-31', rolling_sharpe_window=50,
         cash_buffer_percentage=0.10, annualized_target_volatility=0.20, annual_trading_days=365,
         use_specific_start_date=False, signal_start_date=None, sleeve_budgets=None, risk_max_iterations=None,
-        risk_sleeve_budget_tolerance=None, risk_optimizer_step=None, risk_min_signal=None, sleeve_risk_mode=None):
+        risk_sleeve_budget_tolerance=None, risk_optimizer_step=None, risk_min_signal=None, sleeve_risk_mode=None,
+        # conv_n0=1.5,  # breadth scalar = 0 when N_eff <= n0
+        # conv_n1=4.0,  # breadth scalar = 1 when N_eff >= n1
+        # conv_s0=0.005,  # strength scalar = 0 when gross_raw <= s0  (TUNE)
+        # conv_s1=0.065,  # strength scalar = 1 when gross_raw >= s1  (TUNE)
+        # conv_G_min=0.0,  # minimum gross exposure
+        # conv_G_max=1.0,  # maximum gross exposure (long-only, no leverage)
+        # conv_single_name_gross_cap=0.60,  # if N_eff < 2, cap gross exposure at this
+        # conv_enable=True  # set False to disable conviction logic
+):
     ## Check if data is available for all the tickers
     date_list = cn.coinbase_start_date_by_ticker_dict
     ticker_list = [ticker for ticker in ticker_list if pd.Timestamp(date_list[ticker]).date() < end_date]
@@ -434,7 +654,11 @@ def apply_target_volatility_position_sizing_continuous_strategy_with_rolling_r_s
         use_specific_start_date=use_specific_start_date, signal_start_date=signal_start_date,
         ticker_to_sleeve=ticker_to_sleeve, sleeve_budgets=sleeve_budgets, risk_max_iterations=risk_max_iterations,
         risk_sleeve_budget_tolerance=risk_sleeve_budget_tolerance, risk_optimizer_step=risk_optimizer_step,
-        risk_min_signal=risk_min_signal, sleeve_risk_mode=sleeve_risk_mode)
+        risk_min_signal=risk_min_signal, sleeve_risk_mode=sleeve_risk_mode,
+        # conv_n0=conv_n0, conv_n1=conv_n1,
+        # conv_s0=conv_s0, conv_s1=conv_s1, conv_G_min=conv_G_min, conv_G_max=conv_G_max,
+        # conv_single_name_gross_cap=conv_single_name_gross_cap, conv_enable=conv_enable
+    )
 
     print('Calculating Portfolio Performance!!')
     ## Calculate Portfolio Performance

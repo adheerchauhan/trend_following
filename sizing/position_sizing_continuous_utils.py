@@ -91,8 +91,31 @@ def get_target_volatility_position_sizing(df, cov_matrix, date, ticker_list, dai
 
     ## Apply Scaling Factor with No Leverage
     gross_weight_sum = np.sum(np.abs(daily_weights))
-    cash_scaling_factor = 1.0 / np.maximum(gross_weight_sum, 1e-12)            # ∑ w ≤ 1  (long‑only)
+    # cash_scaling_factor = 1.0 / np.maximum(gross_weight_sum, 1e-12)            # ∑ w ≤ 1  (long‑only)
+    # final_scaling_factor = min(vol_scaling_factor, cash_scaling_factor)
+
+    # Only scale DOWN to respect gross<=1. Never scale UP to fill cash.
+    cash_scaling_factor = 1.0 if gross_weight_sum <= 1.0 else (1.0 / gross_weight_sum)
+
+    # Also cap leverage explicitly (you said long-only, no leverage)
+    vol_scaling_factor = min(vol_scaling_factor, 1.0)
+
     final_scaling_factor = min(vol_scaling_factor, cash_scaling_factor)
+
+    ## Calculate a conviction scalar
+    w = np.abs(daily_weights)
+    gross = float(w.sum())
+
+    if gross > 0:
+        wn = w / gross
+        n_eff = 1.0 / float(np.sum(wn ** 2))  # 1 if single-name, rises with breadth
+    else:
+        n_eff = 0.0
+
+    # Smooth ramp: 0 below ~1.5 names, 1 by ~3.5 names
+    n0, n1 = 1.5, 3.5
+    conviction = float(np.clip((n_eff - n0) / (n1 - n0), 0.0, 1.0))
+    final_scaling_factor *= conviction
 
     df.loc[date, 'target_vol_scaling_factor'] = vol_scaling_factor
     df.loc[date, 'cash_scaling_factor'] = cash_scaling_factor
