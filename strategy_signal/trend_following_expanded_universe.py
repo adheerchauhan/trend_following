@@ -255,6 +255,146 @@ def get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_op
     return df
 
 
+def get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_opt_w_vol_targeting_fix(
+    df, cov_matrix, date, ticker_list,
+    daily_target_volatility,
+    total_portfolio_value_upper_limit,
+    ticker_to_sleeve, sleeve_budgets,
+    risk_max_iterations,
+    risk_sleeve_budget_tolerance,
+    risk_optimizer_step, risk_min_signal,
+    sleeve_risk_mode
+):
+    eps = 1e-12
+
+    # ---------------- Columns ----------------
+    unscaled_weight_cols = [f'{ticker}_vol_adjusted_trend_signal' for ticker in ticker_list]
+    scaled_weight_cols   = [f'{ticker}_target_vol_normalized_weight' for ticker in ticker_list]
+    target_notional_cols = [f'{ticker}_target_notional' for ticker in ticker_list]
+    t_1_price_cols       = [f'{ticker}_t_1_close' for ticker in ticker_list]
+    returns_cols         = [f'{ticker}_t_1_close_pct_returns' for ticker in ticker_list]
+    sleeve_risk_multiplier_cols = [f'{ticker}_sleeve_risk_multiplier' for ticker in ticker_list]
+    sleeve_risk_adj_cols        = [f'{ticker}_sleeve_risk_adj_weights' for ticker in ticker_list]
+
+    # NEW diagnostics columns (per-ticker)
+    unit_weight_cols = [f'{ticker}_unit_gross_weight' for ticker in ticker_list]
+
+    # NEW diagnostics columns (portfolio-level)
+    # These are intentionally explicit to make later analysis easy.
+    diag_cols_defaults = {
+        'rb_gross_raw': 0.0,                 # sum(rb_weights)
+        'rb_max_weight': 0.0,                # max(rb_weights)
+        'rb_n_eff': 0.0,                     # effective number of names from rb_weights
+        'unit_portfolio_vol': 0.0,           # vol(w_unit)
+        'gross_target': 0.0,                 # min(1, target_vol / unit_portfolio_vol)
+        'daily_portfolio_volatility': 0.0,   # vol(final weights) after gross_target
+        'target_vol_scaling_factor': 0.0,    # kept for continuity; equals gross_target here
+        'cash_scaling_factor': 1.0,          # kept for continuity; equals 1.0 here by construction
+        'final_scaling_factor': 0.0,         # kept for continuity; equals gross_target here
+        'total_target_notional': 0.0
+    }
+
+    if date not in df.index or date not in cov_matrix.index:
+        raise ValueError(f"Date {date} not found in DataFrame or covariance matrix index.")
+
+    # ---------------- Inputs for the date ----------------
+    daily_weights = df.loc[date, unscaled_weight_cols].values
+    daily_cov_matrix = cov_matrix.loc[date].loc[returns_cols, returns_cols].values
+
+    # ---------------- Sleeve risk budgeting (unchanged) ----------------
+    if ticker_to_sleeve is not None and sleeve_budgets is not None:
+        rb_weights, sleeve_risk_multiplier = risk_budget_by_sleeve_optimized_by_signal(
+            signals=daily_weights,
+            daily_cov_matrix=daily_cov_matrix,
+            ticker_list=ticker_list,
+            ticker_to_sleeve=ticker_to_sleeve,
+            sleeve_budgets=sleeve_budgets,
+            max_iter=risk_max_iterations,
+            tol=risk_sleeve_budget_tolerance,
+            step=risk_optimizer_step,
+            min_signal_eps=risk_min_signal,
+            mode=sleeve_risk_mode
+        )
+        sleeve_risk_multiplier = np.array(
+            [float(sleeve_risk_multiplier.get(ticker_to_sleeve[t], 1.0)) for t in ticker_list],
+            dtype=float
+        )
+    else:
+        rb_weights = daily_weights.copy()
+        sleeve_risk_multiplier = np.ones(len(ticker_list))
+
+    rb_weights = np.asarray(rb_weights, dtype=float)
+    rb_weights = np.clip(rb_weights, 0.0, None)
+    sleeve_risk_multiplier = np.asarray(sleeve_risk_multiplier, dtype=float)
+
+    df.loc[date, sleeve_risk_adj_cols] = rb_weights
+    df.loc[date, sleeve_risk_multiplier_cols] = sleeve_risk_multiplier
+
+    # ---------------- If flat, zero out and store diagnostics ----------------
+    if np.allclose(rb_weights, 0) or float(np.sum(rb_weights)) <= eps:
+        df.loc[date, scaled_weight_cols] = 0.0
+        df.loc[date, target_notional_cols] = 0.0
+        df.loc[date, unit_weight_cols] = 0.0
+        for k, v in diag_cols_defaults.items():
+            df.loc[date, k] = v
+        return df
+
+    # =========================================================================
+    # Run #1 change: unit-gross vol targeting
+    # =========================================================================
+    rb_gross_raw = float(np.sum(rb_weights))
+    w_unit = rb_weights / max(rb_gross_raw, eps)  # sums to 1 by construction
+
+    # Effective number of names (diagnostic only; no behavior change yet)
+    rb_n_eff = 1.0 / float(np.sum(w_unit ** 2) + eps)
+
+    # Portfolio vol of the unit-gross mix
+    unit_portfolio_vol = size_bin.calculate_portfolio_volatility(w_unit, daily_cov_matrix)
+
+    if unit_portfolio_vol > 0:
+        gross_target = float(daily_target_volatility) / float(unit_portfolio_vol)
+    else:
+        gross_target = 0.0
+
+    # No leverage (spot long-only): cap at 1
+    gross_target = float(min(gross_target, 1.0))
+
+    # Final weights: unit mix scaled by gross_target
+    scaled_weights = w_unit * gross_target
+
+    # Actual realized vol of final weights (diagnostic)
+    daily_portfolio_volatility = size_bin.calculate_portfolio_volatility(scaled_weights, daily_cov_matrix)
+
+    # ---------------- Write diagnostics ----------------
+    df.loc[date, unit_weight_cols] = w_unit
+    df.loc[date, 'rb_gross_raw'] = rb_gross_raw
+    df.loc[date, 'rb_max_weight'] = float(np.max(rb_weights))
+    df.loc[date, 'rb_n_eff'] = float(rb_n_eff)
+    df.loc[date, 'unit_portfolio_vol'] = float(unit_portfolio_vol)
+    df.loc[date, 'gross_target'] = float(gross_target)
+
+    # Keep your existing column names for continuity in downstream code/plots
+    df.loc[date, 'daily_portfolio_volatility'] = float(daily_portfolio_volatility)
+    df.loc[date, 'target_vol_scaling_factor'] = float(gross_target)  # now interpretable
+    df.loc[date, 'cash_scaling_factor'] = 1.0                        # unit-gross => no need to scale to fill cash
+    df.loc[date, 'final_scaling_factor'] = float(gross_target)
+
+    # ---------------- Store scaled weights ----------------
+    df.loc[date, scaled_weight_cols] = scaled_weights
+
+    # ---------------- Notionals and sizes (unchanged) ----------------
+    target_notionals = scaled_weights * total_portfolio_value_upper_limit
+    df.loc[date, target_notional_cols] = target_notionals
+
+    target_sizes = target_notionals / df.loc[date, t_1_price_cols].values
+    for i, ticker in enumerate(ticker_list):
+        df.loc[date, f'{ticker}_target_size'] = target_sizes[i]
+
+    df.loc[date, 'total_target_notional'] = float(np.sum(target_notionals))
+
+    return df
+
+
 def get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_opt_w_conviction(
         df, cov_matrix, date, ticker_list,
         daily_target_volatility,
@@ -546,7 +686,7 @@ def get_target_volatility_daily_portfolio_positions_with_risk_multiplier_sleeve_
         df['total_portfolio_value_upper_limit'].loc[date] = total_portfolio_value_upper_limit
 
         ## Calculate the target notional by ticker
-        df = get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_opt(
+        df = get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_opt_w_vol_targeting_fix(
             df, cov_matrix, date, ticker_list, daily_target_volatility,
             total_portfolio_value_upper_limit, ticker_to_sleeve, sleeve_budgets,
             risk_max_iterations, risk_sleeve_budget_tolerance, risk_optimizer_step,
