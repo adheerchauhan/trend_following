@@ -856,31 +856,79 @@ def risk_budget_by_sleeve_optimized_by_signal(signals, daily_cov_matrix, ticker_
     return sleeve_risk_adj_weights, risk_multiplier
 
 
-def get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_opt(
-        df, cov_matrix, date, ticker_list,
-        daily_target_volatility,
-        total_portfolio_value_upper_limit,
-        ticker_to_sleeve, sleeve_budgets,
-        risk_max_iterations, risk_sleeve_budget_tolerance,
-        risk_optimizer_step, risk_min_signal, sleeve_risk_mode
+def get_target_volatility_position_sizing_with_conditional_cap_w_post_cap_vol_calc(
+    df, cov_matrix, date, ticker_list,
+    daily_target_volatility,
+    total_portfolio_value_upper_limit,
+    ticker_to_sleeve, sleeve_budgets,
+    risk_max_iterations,
+    risk_sleeve_budget_tolerance,
+    risk_optimizer_step, risk_min_signal,
+    sleeve_risk_mode,
+    # ---------------- Conditional single-name cap ----------------
+    cap_mode="conditional",
+    cap_low=0.35,
+    cap_high=0.60,
+    cap_n_eff_threshold=2.0,
+    cap_use_metric="rb_n_eff",
+    cap_max_iter=20,
+    cap_tol=1e-10
 ):
-    ## Scale weights of positions to ensure the portfolio is in line with the target volatility
+    eps = 1e-12
+
     unscaled_weight_cols = [f'{ticker}_vol_adjusted_trend_signal' for ticker in ticker_list]
-    scaled_weight_cols = [f'{ticker}_target_vol_normalized_weight' for ticker in ticker_list]
+    scaled_weight_cols   = [f'{ticker}_target_vol_normalized_weight' for ticker in ticker_list]
     target_notional_cols = [f'{ticker}_target_notional' for ticker in ticker_list]
-    t_1_price_cols = [f'{ticker}_t_1_close' for ticker in ticker_list]
-    returns_cols = [f'{ticker}_t_1_close_pct_returns' for ticker in ticker_list]
+    t_1_price_cols       = [f'{ticker}_t_1_close' for ticker in ticker_list]
+    returns_cols         = [f'{ticker}_t_1_close_pct_returns' for ticker in ticker_list]
     sleeve_risk_multiplier_cols = [f'{ticker}_sleeve_risk_multiplier' for ticker in ticker_list]
-    sleeve_risk_adj_cols = [f'{ticker}_sleeve_risk_adj_weights' for ticker in ticker_list]
+    sleeve_risk_adj_cols        = [f'{ticker}_sleeve_risk_adj_weights' for ticker in ticker_list]
+
+    unit_weight_cols = [f'{ticker}_unit_gross_weight' for ticker in ticker_list]
+
+    # ---- Step 2 NEW diag defaults (only additions) ----
+    diag_cols_defaults = {
+        'rb_gross_raw': 0.0,
+        'rb_max_weight': 0.0,
+        'rb_n_eff': 0.0,
+        'unit_portfolio_vol': 0.0,
+        'gross_target': 0.0,
+        'daily_portfolio_volatility': 0.0,
+        'target_vol_scaling_factor': 0.0,
+        'cash_scaling_factor': 1.0,
+        'final_scaling_factor': 0.0,
+        'total_target_notional': 0.0,
+
+        # cap diagnostics
+        'cap_enabled': 0,
+        'cap_mode': None,
+        'cap_metric': None,
+        'cap_metric_value': np.nan,
+        'cap_n_eff_threshold': np.nan,
+        'cap_low': np.nan,
+        'cap_high': np.nan,
+        'cap_value': np.nan,
+        'cap_binding': 0,
+        'cap_gross_before': 0.0,
+        'cap_gross_after': 0.0,
+        'cap_leftover_gross': 0.0,
+        'cap_max_weight_after': 0.0,
+        'cap_n_eff_after': 0.0,
+
+        # ---- Step 2 NEW diagnostics ----
+        'daily_portfolio_volatility_pre_cap': 0.0,
+        'unit_portfolio_vol_post_cap': 0.0,
+        'vol_error_pre_cap': 0.0,
+        'vol_error_post_cap': 0.0,
+    }
 
     if date not in df.index or date not in cov_matrix.index:
         raise ValueError(f"Date {date} not found in DataFrame or covariance matrix index.")
 
-    ## Iterate through each day and get the unscaled weights and calculate the daily covariance matrix
     daily_weights = df.loc[date, unscaled_weight_cols].values
     daily_cov_matrix = cov_matrix.loc[date].loc[returns_cols, returns_cols].values
 
-    ## Apply the Sleeve Risk Adjusted Multiplier to the Daily Weights
+    # ---------------- Sleeve risk budgeting (unchanged) ----------------
     if ticker_to_sleeve is not None and sleeve_budgets is not None:
         rb_weights, sleeve_risk_multiplier = risk_budget_by_sleeve_optimized_by_signal(
             signals=daily_weights,
@@ -901,55 +949,184 @@ def get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_op
     else:
         rb_weights = daily_weights.copy()
         sleeve_risk_multiplier = np.ones(len(ticker_list))
+
     rb_weights = np.asarray(rb_weights, dtype=float)
     rb_weights = np.clip(rb_weights, 0.0, None)
     sleeve_risk_multiplier = np.asarray(sleeve_risk_multiplier, dtype=float)
+
     df.loc[date, sleeve_risk_adj_cols] = rb_weights
     df.loc[date, sleeve_risk_multiplier_cols] = sleeve_risk_multiplier
 
-    ## If all weights are zero, we can just zero out and return
-    if np.allclose(rb_weights, 0):
+    # ---------------- If flat, zero out and store diagnostics ----------------
+    if np.allclose(rb_weights, 0) or float(np.sum(rb_weights)) <= eps:
         df.loc[date, scaled_weight_cols] = 0.0
         df.loc[date, target_notional_cols] = 0.0
-        df.loc[date, 'daily_portfolio_volatility'] = 0.0
-        df.loc[date, 'target_vol_scaling_factor'] = 0.0
-        df.loc[date, 'cash_scaling_factor'] = 1.0
-        df.loc[date, 'final_scaling_factor'] = 0.0
-        df.loc[date, 'total_target_notional'] = 0.0
+        df.loc[date, unit_weight_cols] = 0.0
+        for k, v in diag_cols_defaults.items():
+            df.loc[date, k] = v
         return df
 
-    ## Calculate the portfolio volatility based on the new weights
-    daily_portfolio_volatility = size_bin.calculate_portfolio_volatility(rb_weights, daily_cov_matrix)
-    df.loc[date, 'daily_portfolio_volatility'] = daily_portfolio_volatility
-    if daily_portfolio_volatility > 0:
-        vol_scaling_factor = daily_target_volatility / daily_portfolio_volatility
+    # =========================================================================
+    # Unit-gross vol targeting (unchanged)
+    # =========================================================================
+    rb_gross_raw = float(np.sum(rb_weights))
+    w_unit = rb_weights / max(rb_gross_raw, eps)  # sums to 1
+
+    rb_n_eff = 1.0 / float(np.sum(w_unit ** 2) + eps)
+    unit_portfolio_vol = size_bin.calculate_portfolio_volatility(w_unit, daily_cov_matrix)
+
+    if unit_portfolio_vol > 0:
+        gross_target = float(daily_target_volatility) / float(unit_portfolio_vol)
     else:
-        vol_scaling_factor = 0
+        gross_target = 0.0
 
-    ## Apply Scaling Factor with No Leverage
-    gross_weight_sum = np.sum(np.abs(rb_weights))
-    # cash_scaling_factor = 1.0 / np.maximum(gross_weight_sum, 1e-12)  # ∑ w ≤ 1  (long‑only)
-    cash_scaling_factor = 1.0 if gross_weight_sum <= 1.0 else (1.0 / gross_weight_sum)
-    final_scaling_factor = min(vol_scaling_factor, cash_scaling_factor)
+    gross_target = float(min(gross_target, 1.0))  # no leverage
+    scaled_weights_pre_cap = w_unit * gross_target  # <-- Step 2 NEW: keep pre-cap weights
 
-    df.loc[date, 'target_vol_scaling_factor'] = vol_scaling_factor
-    df.loc[date, 'cash_scaling_factor'] = cash_scaling_factor
-    df.loc[date, 'final_scaling_factor'] = final_scaling_factor
+    # ---- Step 2 NEW: pre-cap realized vol ----
+    daily_portfolio_volatility_pre_cap = size_bin.calculate_portfolio_volatility(
+        scaled_weights_pre_cap, daily_cov_matrix
+    )
 
-    # Scale the weights to target volatility
-    scaled_weights = rb_weights * final_scaling_factor
+    scaled_weights = scaled_weights_pre_cap.copy()  # preserve existing downstream logic
+
+    # =========================================================================
+    # Step 1: CONDITIONAL single-name cap on FINAL weights (unchanged logic)
+    # =========================================================================
+    cap_enabled = True
+    cap_value = np.nan
+    cap_metric_value = np.nan
+
+    if cap_mode not in ("static", "conditional"):
+        raise ValueError("cap_mode must be 'static' or 'conditional'")
+
+    if cap_use_metric == "rb_n_eff":
+        cap_metric_value = float(rb_n_eff)
+    elif cap_use_metric == "unit_n_eff":
+        cap_metric_value = float(rb_n_eff)
+    else:
+        raise ValueError("cap_use_metric must be 'rb_n_eff' or 'unit_n_eff' for Step 1")
+
+    if cap_mode == "static":
+        cap_value = float(cap_low) if cap_low is not None else np.nan
+    else:
+        if cap_metric_value < float(cap_n_eff_threshold):
+            cap_value = float(cap_low)
+        else:
+            cap_value = float(cap_high)
+
+    if cap_value is None or (isinstance(cap_value, float) and (np.isnan(cap_value) or cap_value <= 0)):
+        cap_enabled = False
+
+    df.loc[date, 'cap_enabled'] = int(cap_enabled)
+    df.loc[date, 'cap_mode'] = cap_mode
+    df.loc[date, 'cap_metric'] = cap_use_metric
+    df.loc[date, 'cap_metric_value'] = cap_metric_value
+    df.loc[date, 'cap_n_eff_threshold'] = float(cap_n_eff_threshold)
+    df.loc[date, 'cap_low'] = float(cap_low) if cap_low is not None else np.nan
+    df.loc[date, 'cap_high'] = float(cap_high) if cap_high is not None else np.nan
+    df.loc[date, 'cap_value'] = float(cap_value) if cap_enabled else np.nan
+
+    cap_binding = 0
+    cap_gross_before = float(np.sum(scaled_weights))
+    cap_gross_after = cap_gross_before
+    cap_leftover = 0.0
+
+    if cap_enabled:
+        cap = float(cap_value)
+
+        capped = np.minimum(scaled_weights, cap)
+        if np.any(capped < scaled_weights - 1e-15):
+            cap_binding = 1
+
+        desired_gross = float(gross_target)
+        current_gross = float(np.sum(capped))
+        leftover = max(desired_gross - current_gross, 0.0)
+
+        w = capped.copy()
+        for _ in range(cap_max_iter):
+            if leftover <= cap_tol:
+                break
+            headroom = cap - w
+            headroom = np.clip(headroom, 0.0, None)
+            total_headroom = float(np.sum(headroom))
+            if total_headroom <= cap_tol:
+                break
+
+            add = headroom / total_headroom * leftover
+            add = np.minimum(add, headroom)
+            w += add
+            leftover = max(desired_gross - float(np.sum(w)), 0.0)
+
+        scaled_weights = w
+        cap_gross_after = float(np.sum(scaled_weights))
+        cap_leftover = float(leftover)
+
+        if cap_gross_after > eps:
+            w_u = scaled_weights / cap_gross_after
+            cap_n_eff_after = float(1.0 / (np.sum(w_u ** 2) + eps))
+        else:
+            cap_n_eff_after = 0.0
+        cap_max_weight_after = float(np.max(scaled_weights)) if len(scaled_weights) else 0.0
+
+        df.loc[date, 'cap_binding'] = int(cap_binding)
+        df.loc[date, 'cap_gross_before'] = cap_gross_before
+        df.loc[date, 'cap_gross_after'] = cap_gross_after
+        df.loc[date, 'cap_leftover_gross'] = cap_leftover
+        df.loc[date, 'cap_max_weight_after'] = cap_max_weight_after
+        df.loc[date, 'cap_n_eff_after'] = cap_n_eff_after
+    else:
+        df.loc[date, 'cap_binding'] = 0
+        df.loc[date, 'cap_gross_before'] = cap_gross_before
+        df.loc[date, 'cap_gross_after'] = cap_gross_before
+        df.loc[date, 'cap_leftover_gross'] = 0.0
+        df.loc[date, 'cap_max_weight_after'] = float(np.max(scaled_weights))
+        if cap_gross_before > eps:
+            w_u = scaled_weights / cap_gross_before
+            df.loc[date, 'cap_n_eff_after'] = float(1.0 / (np.sum(w_u ** 2) + eps))
+        else:
+            df.loc[date, 'cap_n_eff_after'] = 0.0
+
+    # ---- Step 2 NEW: unit mix vol AFTER cap (if any exposure) ----
+    if cap_gross_after > eps:
+        w_unit_post_cap = scaled_weights / cap_gross_after  # sums ~1
+        unit_portfolio_vol_post_cap = size_bin.calculate_portfolio_volatility(w_unit_post_cap, daily_cov_matrix)
+    else:
+        unit_portfolio_vol_post_cap = 0.0
+
+    # Actual realized vol of final weights (post-cap)
+    daily_portfolio_volatility = size_bin.calculate_portfolio_volatility(scaled_weights, daily_cov_matrix)
+
+    # ---- Step 2 NEW: vol errors to target ----
+    df.loc[date, 'daily_portfolio_volatility_pre_cap'] = float(daily_portfolio_volatility_pre_cap)
+    df.loc[date, 'unit_portfolio_vol_post_cap'] = float(unit_portfolio_vol_post_cap)
+    df.loc[date, 'vol_error_pre_cap'] = float(daily_portfolio_volatility_pre_cap - float(daily_target_volatility))
+    df.loc[date, 'vol_error_post_cap'] = float(daily_portfolio_volatility - float(daily_target_volatility))
+
+    # ---------------- Write existing diagnostics ----------------
+    df.loc[date, unit_weight_cols] = w_unit
+    df.loc[date, 'rb_gross_raw'] = rb_gross_raw
+    df.loc[date, 'rb_max_weight'] = float(np.max(rb_weights))
+    df.loc[date, 'rb_n_eff'] = float(rb_n_eff)
+    df.loc[date, 'unit_portfolio_vol'] = float(unit_portfolio_vol)
+    df.loc[date, 'gross_target'] = float(gross_target)
+
+    df.loc[date, 'daily_portfolio_volatility'] = float(daily_portfolio_volatility)
+    df.loc[date, 'target_vol_scaling_factor'] = float(gross_target)
+    df.loc[date, 'cash_scaling_factor'] = 1.0
+    df.loc[date, 'final_scaling_factor'] = float(gross_target)
+
     df.loc[date, scaled_weight_cols] = scaled_weights
 
-    ## Calculate the target notional and size
+    # ---------------- Notionals and sizes (unchanged) ----------------
     target_notionals = scaled_weights * total_portfolio_value_upper_limit
     df.loc[date, target_notional_cols] = target_notionals
-    target_sizes = target_notionals / df.loc[date, t_1_price_cols].values
 
+    target_sizes = target_notionals / df.loc[date, t_1_price_cols].values
     for i, ticker in enumerate(ticker_list):
         df.loc[date, f'{ticker}_target_size'] = target_sizes[i]
 
-    total_target_notional = target_notionals.sum()
-    df.loc[date, 'total_target_notional'] = total_target_notional
+    df.loc[date, 'total_target_notional'] = float(np.sum(target_notionals))
 
     return df
 
@@ -1106,6 +1283,13 @@ def get_desired_trades_by_ticker(client, cfg, date):
     risk_sleeve_budget_tolerance = float(cfg['risk_and_sizing'].get('risk_sleeve_budget_tolerance', 1e-5))
     risk_optimizer_step = float(cfg['risk_and_sizing'].get('risk_optimizer_step', 0.5))
     risk_max_iterations = int(cfg['risk_and_sizing'].get('risk_max_iterations', 100))
+    cap_mode = str(cfg['risk_and_sizing'].get('cap_mode', 'conditional')).strip().lower()
+    cap_low = float(cfg['risk_and_sizing'].get('cap_low', 0.35))
+    cap_high = float(cfg['risk_and_sizing'].get('cap_high', 0.60))
+    cap_n_eff_threshold = float(cfg['risk_and_sizing'].get('cap_n_eff_threshold', 2.0))
+    cap_use_metric = str(cfg['risk_and_sizing'].get('cap_use_metric', 'rb_n_eff')).strip().lower()
+    cap_max_iter = int(cfg['risk_and_sizing'].get('cap_max_iter', 20))
+    cap_tol = float(cfg['risk_and_sizing'].get('cap_tol', 1e-10))
 
     transaction_cost_est = cfg['execution_and_costs']['transaction_cost_est']
     passive_trade_rate = cfg['execution_and_costs']['passive_trade_rate']
@@ -1149,7 +1333,6 @@ def get_desired_trades_by_ticker(client, cfg, date):
     ## Get Portfolio Positions and Cash
     print(f'Start Time: {datetime.now()}')
     ## Create Coinbase Client & Portfolio UUID
-    # client = cn.get_coinbase_rest_api_client(portfolio_name=portfolio_name)
     portfolio_uuid = cn.get_portfolio_uuid(client, portfolio_name=portfolio_name)
 
     print(f'Get Portfolio Equity and Cash Time: {datetime.now()}')
@@ -1312,12 +1495,12 @@ def get_desired_trades_by_ticker(client, cfg, date):
     ## Derive the Daily Target Portfolio Volatility
     daily_target_volatility = annualized_target_volatility / np.sqrt(annual_trading_days)
 
-    ## TODO: THIS NEEDS TO CHANGE TO ACCOUNT FOR THE RISK MULTIPLIER
     ## Calculate the target notional by ticker
-    df = get_target_volatility_position_sizing_with_risk_multiplier_sleeve_weights_opt(
+    df = get_target_volatility_position_sizing_with_conditional_cap_w_post_cap_vol_calc(
         df, cov_matrix, date, ticker_list, daily_target_volatility, total_portfolio_value_upper_limit,
         ticker_to_sleeve, sleeve_budgets, risk_max_iterations, risk_sleeve_budget_tolerance,
-        risk_optimizer_step, risk_min_signal, sleeve_risk_mode)
+        risk_optimizer_step, risk_min_signal, sleeve_risk_mode, cap_mode, cap_low, cap_high,
+        cap_n_eff_threshold, cap_use_metric, cap_max_iter, cap_tol)
 
     # --- 4) Build desired trades with STOP-GATE for new/added longs --------------
     ## Get Desired Trades based on Target Notionals and Current Notional Values by Ticker

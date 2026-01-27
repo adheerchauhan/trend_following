@@ -111,6 +111,13 @@ risk_and_sizing:
   risk_optimizer_step: 0.5
   risk_min_signal: 0.0001
   sleeve_risk_mode: cap
+  cap_mode: 'conditional'
+  cap_low: 0.35
+  cap_high: 0.60
+  cap_n_eff_threshold: 2.0
+  cap_use_metric: 'rb_n_eff'
+  cap_max_iter: 20
+  cap_tol: 1e-10
 
 execution_and_costs:
   transaction_cost_est: 0.001
