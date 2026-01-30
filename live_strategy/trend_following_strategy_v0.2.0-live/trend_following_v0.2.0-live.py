@@ -137,7 +137,11 @@ def write_jsonl(path: Path, obj: dict):
 
 
 def log_event(kind: str, **payload):
-    write_jsonl(HEARTBEAT_LOG, {"ts": utc_now_iso(), "event": kind, **payload})
+    base = {"ts": utc_now_iso(), "event": kind}
+    if CURRENT_RUN_ID is not None:
+        base["run_id"] = CURRENT_RUN_ID
+    base.update(payload)
+    write_jsonl(HEARTBEAT_LOG, base)
 
 
 def save_df_snapshot(
@@ -201,14 +205,77 @@ def write_daily_summary(
     date = df.index[min(pos, len(df.index) - 1)]
 
     # Portfolio headline only (lean)
+    # --- helper to safely pull df scalars without KeyErrors ---
+    def _df_float(col, default=None):
+        if col not in df.columns:
+            return default
+        v = df.loc[date, col]
+        if pd.isna(v):
+            return default
+        try:
+            return float(v)
+        except Exception:
+            return default
+
+    def _df_int(col, default=None):
+        if col not in df.columns:
+            return default
+        v = df.loc[date, col]
+        if pd.isna(v):
+            return default
+        try:
+            return int(v)
+        except Exception:
+            return default
+
+    def _df_any(col, default=None):
+        if col not in df.columns:
+            return default
+        v = df.loc[date, col]
+        if pd.isna(v):
+            return default
+        return v
+
+    # Portfolio headline + sizing/cap diagnostics
     portfolio = {
-        "total_portfolio_value": float(df.loc[date, "total_portfolio_value"]),
-        "available_cash": float(df.loc[date, "available_cash"]),
-        "daily_portfolio_volatility": float(df.loc[date, "daily_portfolio_volatility"]),
-        "final_scaling_factor": float(df.loc[date, "final_scaling_factor"]),
-        "total_target_notional": float(df.loc[date, "total_target_notional"]),
-        "total_actual_position_notional": float(df.loc[date, "total_actual_position_notional"]),
-        "count_of_positions": int(df.loc[date, "count_of_positions"]),
+        "total_portfolio_value": _df_float("total_portfolio_value", 0.0),
+        "available_cash": _df_float("available_cash", 0.0),
+
+        # Realized vol (post-cap / final)
+        "daily_portfolio_volatility": _df_float("daily_portfolio_volatility", 0.0),
+        "final_scaling_factor": _df_float("final_scaling_factor", 0.0),
+        "total_target_notional": _df_float("total_target_notional", 0.0),
+        "total_actual_position_notional": _df_float("total_actual_position_notional", 0.0),
+        "count_of_positions": int(_df_int("count_of_positions", 0)),
+
+        # Sizing diagnostics (unit mix + gross)
+        "gross_target": _df_float("gross_target"),
+        "unit_portfolio_vol": _df_float("unit_portfolio_vol"),
+        "rb_gross_raw": _df_float("rb_gross_raw"),
+        "rb_max_weight": _df_float("rb_max_weight"),
+        "rb_n_eff": _df_float("rb_n_eff"),
+
+        # Pre-cap realized vol + errors (target-vol sanity)
+        "daily_portfolio_volatility_pre_cap": _df_float("daily_portfolio_volatility_pre_cap"),
+        "vol_error_pre_cap": _df_float("vol_error_pre_cap"),
+        "vol_error_post_cap": _df_float("vol_error_post_cap"),
+
+        # Cap diagnostics (only meaningful if cap is enabled)
+        "cap_enabled": _df_int("cap_enabled"),
+        "cap_binding": _df_int("cap_binding"),
+        "cap_mode": str(_df_any("cap_mode")) if _df_any("cap_mode") is not None else None,
+        "cap_metric": str(_df_any("cap_metric")) if _df_any("cap_metric") is not None else None,
+        "cap_metric_value": _df_float("cap_metric_value"),
+        "cap_n_eff_threshold": _df_float("cap_n_eff_threshold"),
+        "cap_value": _df_float("cap_value"),
+        "cap_gross_before": _df_float("cap_gross_before"),
+        "cap_gross_after": _df_float("cap_gross_after"),
+        "cap_leftover_gross": _df_float("cap_leftover_gross"),
+        "cap_max_weight_after": _df_float("cap_max_weight_after"),
+        "cap_n_eff_after": _df_float("cap_n_eff_after"),
+
+        # optional but helpful: unit-vol after cap (mix change diagnostic)
+        "unit_portfolio_vol_post_cap": _df_float("unit_portfolio_vol_post_cap"),
     }
 
     # Sleeves: keep earlier format, but accurate + explicit
@@ -928,7 +995,7 @@ def get_target_volatility_position_sizing_with_conditional_cap_w_post_cap_vol_ca
     daily_weights = df.loc[date, unscaled_weight_cols].values
     daily_cov_matrix = cov_matrix.loc[date].loc[returns_cols, returns_cols].values
 
-    # ---------------- Sleeve risk budgeting (unchanged) ----------------
+    # ---------------- Sleeve risk budgeting  ----------------
     if ticker_to_sleeve is not None and sleeve_budgets is not None:
         rb_weights, sleeve_risk_multiplier = risk_budget_by_sleeve_optimized_by_signal(
             signals=daily_weights,
@@ -967,7 +1034,7 @@ def get_target_volatility_position_sizing_with_conditional_cap_w_post_cap_vol_ca
         return df
 
     # =========================================================================
-    # Unit-gross vol targeting (unchanged)
+    # Unit-gross vol targeting
     # =========================================================================
     rb_gross_raw = float(np.sum(rb_weights))
     w_unit = rb_weights / max(rb_gross_raw, eps)  # sums to 1
@@ -991,7 +1058,7 @@ def get_target_volatility_position_sizing_with_conditional_cap_w_post_cap_vol_ca
     scaled_weights = scaled_weights_pre_cap.copy()  # preserve existing downstream logic
 
     # =========================================================================
-    # Step 1: CONDITIONAL single-name cap on FINAL weights (unchanged logic)
+    # Step 1: CONDITIONAL single-name cap on FINAL weights
     # =========================================================================
     cap_enabled = True
     cap_value = np.nan
@@ -1118,7 +1185,7 @@ def get_target_volatility_position_sizing_with_conditional_cap_w_post_cap_vol_ca
 
     df.loc[date, scaled_weight_cols] = scaled_weights
 
-    # ---------------- Notionals and sizes (unchanged) ----------------
+    # ---------------- Notionals and sizes ----------------
     target_notionals = scaled_weights * total_portfolio_value_upper_limit
     df.loc[date, target_notional_cols] = target_notionals
 
