@@ -14,21 +14,17 @@ from typing import Iterable
 import argparse
 import json
 import traceback
-from strategy_signal.trend_following_signal import (
-    get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr_vol_of_vol
-)
 from utils import coinbase_utils as cn
 from portfolio import strategy_performance as perf
-from sizing import position_sizing_binary_utils as size_bin
-from sizing import position_sizing_continuous_utils as size_cont
 from utils import stop_loss_cooldown_state as state
 from pathlib import Path
 import yaml
 import uuid
 from trend_following_email_summary_v020 import send_summary_email
+import trend_following_signal_v020 as signal
 
 
-STATE_DIR = Path("/Users/adheerchauhan/Documents/live_strategy_logs/trend_following_v0_2_0-live")
+STATE_DIR = Path("/Users/adheerchauhan/Documents/live_strategy_logs/trend_following_v020_live")
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 COOLDOWN_STATE_FILE = STATE_DIR / "stop_loss_breach_cooldown_state.json"
 COOLDOWN_LOG_FILE   = STATE_DIR / "stop_loss_breach_cooldown_log.jsonl"
@@ -374,7 +370,7 @@ def write_daily_summary(
 
 
 ## Load Config file for the strategy
-def load_prod_strategy_config(strategy_version='v0.2.0'):
+def load_prod_strategy_config(strategy_version='v020'):
     # nb_cwd = Path.cwd()  # git/trend_following/research/notebooks
     # config_path = (
     #         nb_cwd.parents[1]  # -> git/trend_following
@@ -390,12 +386,90 @@ def load_prod_strategy_config(strategy_version='v0.2.0'):
     fname = f"trend_strategy_config_{strategy_version}.yaml"
     config_path = cfg_dir / fname
 
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config not found: {config_path}")
+
     print(f'Config Path: {config_path}')  # sanity check
 
     with open(config_path, "r") as f:
         cfg = yaml.safe_load(f)
 
     return cfg
+
+
+def reorder_columns_by_ticker(columns, tickers):
+    """
+    Reorder columns ticker-by-ticker using a fixed field order (not alphabetical).
+    Any ticker columns not in the template are appended at the end (preserving original order).
+    Non-ticker columns are appended last (preserving original order).
+    """
+
+    # The desired per-ticker order (everything after "{ticker}_")
+    field_order = [
+        "t_1_close",
+        "t_1_open",
+        "data_ok",
+        "t_1_close_pct_returns",
+        "mavg_ribbon_slope",
+        "mavg_ribbon_rank",
+        "donchian_continuous_signal",
+        "donchian_continuous_signal_rank",
+        "final_weighted_additive_signal",
+        "rolling_r_sqr",
+        "vol_of_vol_penalty",
+        "regime_filter",
+        "final_signal",
+        "annualized_volatility_30",
+        "vol_adjusted_trend_signal",
+        "sleeve_risk_multiplier",
+        "sleeve_risk_adj_weights",
+        "cash_shrink_factor",
+        "target_vol_normalized_weight",
+        "target_size",
+        "target_notional",
+        "open_position_size",
+        "open_position_notional",
+        "new_position_size",
+        "new_position_entry_exit_price",
+        "new_position_notional",
+        "actual_position_size",
+        "actual_position_notional",
+        "cooldown_counter",
+        "event",
+        "short_sale_proceeds",
+        "stop_loss",
+        "stopout_flag",
+    ]
+
+    col_set = set(columns)
+    ordered = []
+    used = set()
+
+    # helper: exact match column name for a ticker/field
+    def colname(ticker, field):
+        return f"{ticker}_{field}"
+
+    for ticker in tickers:
+        # 1) add template-ordered columns if present
+        for field in field_order:
+            c = colname(ticker, field)
+            if c in col_set:
+                ordered.append(c)
+                used.add(c)
+
+        # 2) append any remaining columns for this ticker (preserve original order)
+        for c in columns:
+            if c not in used and c.startswith(f"{ticker}_"):
+                ordered.append(c)
+                used.add(c)
+
+    # 3) append non-ticker (or unmatched) columns (preserve original order)
+    for c in columns:
+        if c not in used:
+            ordered.append(c)
+            used.add(c)
+
+    return ordered
 
 
 ## Generate weighted and scaled final signal
@@ -422,6 +496,7 @@ def get_strategy_trend_signal(cfg):
         "entry_rolling_donchian_window": cfg["signals"]["donchian"]["entry_rolling_donchian_window"],
         "exit_rolling_donchian_window": cfg["signals"]["donchian"]["exit_rolling_donchian_window"],
         "use_donchian_exit_gate": cfg["signals"]["donchian"]["use_donchian_exit_gate"],
+        "donchian_shift": cfg["signals"]["donchian"]["donchian_shift"],
 
         # Signal Weights
         "ma_crossover_signal_weight": cfg["signals"]["weighting"]["ma_crossover_signal_weight"],
@@ -443,21 +518,14 @@ def get_strategy_trend_signal(cfg):
         "r2_strong_threshold": cfg["signals"]["filters"]["rolling_r2"]["r2_strong_threshold"],
 
         # Signal & Data Parameters
-        "use_activation": cfg["signals"]["activation"]["use_activation"],
-        "tanh_activation_constant_dict": cfg["signals"]["activation"]["tanh_activation_constant_dict"],
-        "moving_avg_type": cfg["data"]["moving_avg_type"],
         "long_only": cfg["run"]["long_only"],
-        "price_or_returns_calc": cfg["data"]["price_or_returns_calc"],
-        "use_coinbase_data": cfg["data"]["use_coinbase_data"],
-        "use_saved_files": False,
-        "saved_file_end_date": None  # cfg["data"]["saved_file_end_date"]
     }
 
-    df_trend = get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr_vol_of_vol(**sig_kwargs)
+    df_trend = signal.get_trend_donchian_signal_for_portfolio_with_rolling_r_sqr_vol_of_vol_prod(**sig_kwargs)
 
     print('Generating Volatility Adjusted Trend Signal!!')
     ## Get Volatility Adjusted Trend Signal
-    df_signal = size_cont.get_volatility_adjusted_trend_signal_continuous(
+    df_signal = signal.get_volatility_adjusted_trend_signal_continuous_prod(
         df_trend,
         ticker_list=cfg['universe']['tickers'],
         volatility_window=cfg['risk_and_sizing']['volatility_window'],
@@ -467,39 +535,68 @@ def get_strategy_trend_signal(cfg):
     return df_signal
 
 
-def calculate_average_true_range_live(date, ticker, rolling_atr_window=20):
-    end_date = date
-    start_date = date - pd.Timedelta(days=(rolling_atr_window + 200))
-    df = cn.save_historical_crypto_prices_from_coinbase(ticker=ticker, user_start_date=True, start_date=start_date,
-                                                        end_date=end_date, save_to_file=False,
-                                                        portfolio_name='Trend Following')
+def calculate_average_true_range_live(date, ticker, rolling_atr_window=20, portfolio_name="Trend Following"):
+    """
+    Compute ATR using only fully formed daily bars (through yesterday),
+    then align the output so the row at `date` contains ATR based on T-1 data.
 
-    # Make sure index is UTC tz-aware and sorted
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index, utc=True)
-    elif df.index.tz is None:
-        df.index = df.index.tz_localize('UTC')
-    else:
-        df.index = df.index.tz_convert('UTC')
+    This mirrors your prod signal pattern:
+      - pull through run_end_date = date - 1 day
+      - append placeholder for `date`
+      - shift(1) so `date` uses yesterday's completed bar
+    """
+    end_date = pd.Timestamp(date).normalize()
+    run_end_date = end_date - pd.Timedelta(days=1)
+
+    # extra history for stability (your original: atr_window + 200)
+    start_date = end_date - pd.Timedelta(days=(rolling_atr_window + 200))
+
+    # Pull only through yesterday
+    df = signal.save_historical_crypto_prices_from_coinbase_with_delay(
+        ticker=ticker,
+        user_start_date=True,
+        start_date=start_date,
+        end_date=run_end_date,
+        save_to_file=False,
+        portfolio_name=portfolio_name,
+        retries=5,
+        delay=10,
+        retry_on_empty=True,
+    )
+
+    # Ensure clean daily index (tz-naive normalized) and sorted
+    df.index = pd.to_datetime(df.index, errors="coerce").normalize()
     df = df.sort_index()
 
-    df.columns = [f'{ticker}_{x}' for x in df.columns]
+    # Keep only what we need and standardize names
+    df = df[["open", "high", "low", "close", "volume"]].rename(
+        columns=lambda c: f"{ticker}_{c}"
+    )
 
-    ## Get T-1 Close Price
-    df[f'{ticker}_t_1_close'] = df[f'{ticker}_close'].shift(1)
+    # Add today's placeholder row so we can align "as-of today" values
+    df.loc[end_date] = np.nan
 
-    # Calculate the True Range (TR) and Average True Range (ATR)
-    df[f'{ticker}_high-low'] = df[f'{ticker}_high'] - df[f'{ticker}_low']
-    df[f'{ticker}_high-close'] = np.abs(df[f'{ticker}_high'] - df[f'{ticker}_close'].shift(1))
-    df[f'{ticker}_low-close'] = np.abs(df[f'{ticker}_low'] - df[f'{ticker}_close'].shift(1))
-    df[f'{ticker}_true_range_price'] = df[
-        [f'{ticker}_high-low', f'{ticker}_high-close', f'{ticker}_low-close']].max(axis=1)
-    df[f'{ticker}_{rolling_atr_window}_avg_true_range_price'] = df[f'{ticker}_true_range_price'].ewm(
-        span=rolling_atr_window, adjust=False).mean()
+    # Shift OHLC so the row at `end_date` contains yesterday's bar
+    for c in ["open", "high", "low", "close", "volume"]:
+        df[f"{ticker}_{c}"] = df[f"{ticker}_{c}"].shift(1)
 
-    ## Shift by 1 to avoid look-ahead bias
-    df[f'{ticker}_{rolling_atr_window}_avg_true_range_price'] = df[
-        f'{ticker}_{rolling_atr_window}_avg_true_range_price'].shift(1)
+    # True Range components using shifted (fully formed) bars
+    prev_close = df[f"{ticker}_close"].shift(1)
+    high = df[f"{ticker}_high"]
+    low  = df[f"{ticker}_low"]
+
+    df[f"{ticker}_true_range_price"] = pd.concat(
+        [
+            (high - low),
+            (high - prev_close).abs(),
+            (low  - prev_close).abs(),
+        ],
+        axis=1
+    ).max(axis=1)
+
+    # ATR (EWMA)
+    atr_col = f"{ticker}_{rolling_atr_window}_avg_true_range_price"
+    df[atr_col] = df[f"{ticker}_true_range_price"].ewm(span=rolling_atr_window, adjust=False).mean()
 
     return df
 
@@ -507,7 +604,7 @@ def calculate_average_true_range_live(date, ticker, rolling_atr_window=20):
 def chandelier_stop_long(date, ticker, highest_high_window, rolling_atr_window, atr_multiplier):
     ## Get Average True Range
     df_atr = calculate_average_true_range_live(date=date, ticker=ticker, rolling_atr_window=rolling_atr_window)
-    key = _utc_ts(date).floor('D')
+    key = pd.Timestamp(date).normalize()
     atr_col = f'{ticker}_{rolling_atr_window}_avg_true_range_price'
     high_col = f'{ticker}_high'
 
@@ -518,7 +615,7 @@ def chandelier_stop_long(date, ticker, highest_high_window, rolling_atr_window, 
     atr = float(atr_series.iloc[-1])
 
     ## Get the Highest High from previous date
-    highest_high_t_1_series = df_atr[high_col].rolling(highest_high_window).max().shift(1).loc[:key]
+    highest_high_t_1_series = df_atr[high_col].rolling(highest_high_window).max().loc[:key]
     if highest_high_t_1_series.empty:
         raise ValueError(f"No price data on or before {key} for {ticker}.")
     highest_high_t_1 = float(highest_high_t_1_series.iloc[-1])
@@ -1040,7 +1137,7 @@ def get_target_volatility_position_sizing_with_conditional_cap_w_post_cap_vol_ca
     w_unit = rb_weights / max(rb_gross_raw, eps)  # sums to 1
 
     rb_n_eff = 1.0 / float(np.sum(w_unit ** 2) + eps)
-    unit_portfolio_vol = size_bin.calculate_portfolio_volatility(w_unit, daily_cov_matrix)
+    unit_portfolio_vol = signal.calculate_portfolio_volatility(w_unit, daily_cov_matrix)
 
     if unit_portfolio_vol > 0:
         gross_target = float(daily_target_volatility) / float(unit_portfolio_vol)
@@ -1051,7 +1148,7 @@ def get_target_volatility_position_sizing_with_conditional_cap_w_post_cap_vol_ca
     scaled_weights_pre_cap = w_unit * gross_target  # <-- Step 2 NEW: keep pre-cap weights
 
     # ---- Step 2 NEW: pre-cap realized vol ----
-    daily_portfolio_volatility_pre_cap = size_bin.calculate_portfolio_volatility(
+    daily_portfolio_volatility_pre_cap = signal.calculate_portfolio_volatility(
         scaled_weights_pre_cap, daily_cov_matrix
     )
 
@@ -1157,12 +1254,12 @@ def get_target_volatility_position_sizing_with_conditional_cap_w_post_cap_vol_ca
     # ---- Step 2 NEW: unit mix vol AFTER cap (if any exposure) ----
     if cap_gross_after > eps:
         w_unit_post_cap = scaled_weights / cap_gross_after  # sums ~1
-        unit_portfolio_vol_post_cap = size_bin.calculate_portfolio_volatility(w_unit_post_cap, daily_cov_matrix)
+        unit_portfolio_vol_post_cap = signal.calculate_portfolio_volatility(w_unit_post_cap, daily_cov_matrix)
     else:
         unit_portfolio_vol_post_cap = 0.0
 
     # Actual realized vol of final weights (post-cap)
-    daily_portfolio_volatility = size_bin.calculate_portfolio_volatility(scaled_weights, daily_cov_matrix)
+    daily_portfolio_volatility = signal.calculate_portfolio_volatility(scaled_weights, daily_cov_matrix)
 
     # ---- Step 2 NEW: vol errors to target ----
     df.loc[date, 'daily_portfolio_volatility_pre_cap'] = float(daily_portfolio_volatility_pre_cap)
@@ -1447,6 +1544,7 @@ def get_desired_trades_by_ticker(client, cfg, date):
     col_defaults = {}
     for ticker in ticker_list:
         col_defaults.update({
+            f'{ticker}_new_position_size': 0.0,
             f'{ticker}_new_position_notional': 0.0,
             f'{ticker}_open_position_size': 0.0,
             f'{ticker}_open_position_notional': 0.0,
@@ -1468,12 +1566,12 @@ def get_desired_trades_by_ticker(client, cfg, date):
         })
 
     df = ensure_cols(df, col_defaults)
-    ord_cols = size_bin.reorder_columns_by_ticker(df.columns, ticker_list)
+    ord_cols = reorder_columns_by_ticker(df.columns, ticker_list)
     df = df[ord_cols]
 
     # --- Data-quality gate (per ticker): if today's OHLC is missing, freeze signal and skip trades later ---
     for ticker in ticker_list:
-        req = [f"{ticker}_open", f"{ticker}_high", f"{ticker}_low", f"{ticker}_close"]
+        req = [f"{ticker}_t_1_open", f"{ticker}_t_1_high", f"{ticker}_t_1_low", f"{ticker}_t_1_close"]
         req = [c for c in req if c in df.columns]
 
         ok = False  # default to safe fail
@@ -2182,7 +2280,7 @@ def main():
 
     try:
         # 1) Load config (adjust import to your config file)
-        cfg = load_prod_strategy_config(strategy_version='v0.2.0')
+        cfg = load_prod_strategy_config(strategy_version='v020')
         portfolio_name = cfg['portfolio']['name']
         ticker_list = cfg['universe']['tickers']
         sleeve_budgets = cfg['universe']['sleeves']

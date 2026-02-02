@@ -75,6 +75,7 @@ signals:
     entry_rolling_donchian_window: 56
     exit_rolling_donchian_window: 28
     use_donchian_exit_gate: false
+    donchian_shift: true
   weighting:
     ma_crossover_signal_weight: 0.85
     donchian_signal_weight: 0.15

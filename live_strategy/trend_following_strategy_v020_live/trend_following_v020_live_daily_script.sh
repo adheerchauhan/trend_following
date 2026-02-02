@@ -2,8 +2,8 @@
 set -euo pipefail
 
 REPO_ROOT="/Users/adheerchauhan/Documents/git/trend_following"
-PY="$REPO_ROOT/live_strategy/trend_following_strategy_v0.2.0-live/trend_following_v0.2.0-live.py"
-LOG_DIR="/Users/adheerchauhan/Documents/live_strategy_logs/trend_following_v0_2_0-live/"
+PY="$REPO_ROOT/live_strategy/trend_following_strategy_v020_live/trend_following_v020_live.py"
+LOG_DIR="/Users/adheerchauhan/Documents/live_strategy_logs/trend_following_v020_live/"
 mkdir -p "$LOG_DIR"
 
 # ---- DEBUG LOGGING (temporary while we stabilize) ----
@@ -56,5 +56,5 @@ PY
 export PYTHONUNBUFFERED=1
 
 # Run your app
-#"$PYTHON" "$PY" --dry-run --force-run --run-at-utc-hour 0 --gate-minutes 500 >> "$LOG_DIR/live_run.log" 2>&1
-"$PYTHON" "$PY" --run-at-utc-hour 0 --gate-minutes 5 >> "$LOG_DIR/live_run.log" 2>&1
+"$PYTHON" "$PY" --dry-run --force-run --run-at-utc-hour 0 --gate-minutes 500 >> "$LOG_DIR/live_run.log" 2>&1
+#"$PYTHON" "$PY" --run-at-utc-hour 0 --gate-minutes 5 >> "$LOG_DIR/live_run.log" 2>&1
