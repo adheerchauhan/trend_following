@@ -24,7 +24,7 @@ from trend_following_email_summary_v020 import send_summary_email
 import trend_following_signal_v020 as signal
 
 
-STATE_DIR = Path("/Users/adheerchauhan/Documents/live_strategy_logs/trend_following_v020_live")
+STATE_DIR = Path("/Users/adheerchauhan/live_strategy_logs/trend_following_v020_live")
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 COOLDOWN_STATE_FILE = STATE_DIR / "stop_loss_breach_cooldown_state.json"
 COOLDOWN_LOG_FILE   = STATE_DIR / "stop_loss_breach_cooldown_log.jsonl"
@@ -1126,8 +1126,8 @@ def get_target_volatility_position_sizing_with_conditional_cap_w_post_cap_vol_ca
         df.loc[date, scaled_weight_cols] = 0.0
         df.loc[date, target_notional_cols] = 0.0
         df.loc[date, unit_weight_cols] = 0.0
-        for k, v in diag_cols_defaults.items():
-            df.loc[date, k] = v
+        keys = list(diag_cols_defaults.keys())
+        df.loc[date, keys] = list(diag_cols_defaults.values())
         return df
 
     # =========================================================================

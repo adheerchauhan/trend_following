@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import os
+from pathlib import Path
 import math
 from decimal import Decimal
 import math, time, uuid
@@ -108,14 +109,27 @@ coinbase_start_date_by_ticker_dict = {
 }
 
 
-def get_portfolio_key(portfolio_name):
-    key_location = ''
-    if portfolio_name == 'Default':
-        key_location = f'{os.environ.get('HOME')}/Documents/git/trend_following/exchange_config/cdp_api_key_default.json'
-    elif portfolio_name == 'Trend Following':
-        key_location = f'{os.environ.get('HOME')}/Documents/git/trend_following/exchange_config/cdp_api_key_trend_following.json'
+def get_repo_root() -> Path:
+    # Prefer REPO_ROOT exported by your cron/bash script
+    rr = os.getenv("REPO_ROOT")
+    if rr:
+        return Path(rr).expanduser().resolve()
+    # Fallback: coinbase_utils.py is in <repo>/utils/
+    return Path(__file__).resolve().parents[1]
 
-    return key_location
+
+def get_portfolio_key(portfolio_name: str) -> str:
+    repo_root = get_repo_root()
+    exchange_dir = repo_root / "exchange_config"
+
+    if portfolio_name == "Default":
+        key_path = exchange_dir / "cdp_api_key_default.json"
+    elif portfolio_name == "Trend Following":
+        key_path = exchange_dir / "cdp_api_key_trend_following.json"
+    else:
+        raise ValueError(f"Unknown portfolio_name: {portfolio_name}")
+
+    return str(key_path)
 
 
 def get_coinbase_rest_api_client(portfolio_name):
@@ -371,7 +385,7 @@ def get_coinbase_candle_data(client, product_id, start_date, end_date):
 
 
 def get_coinbase_ohlc_data(ticker):
-    pickle_file_path = f"{os.environ.get('HOME')}/Documents/git/trend_following/data_folder/coinbase_historical_price_folder/"
+    pickle_file_path = f"{os.environ.get('HOME')}/git/trend_following/data_folder/coinbase_historical_price_folder/"
     files = os.listdir(pickle_file_path)
     matching_files = [f for f in files if f.startswith(ticker)]
 
@@ -464,9 +478,9 @@ def get_current_positions_from_portfolio(client, ticker_list, portfolio_name='De
     for ticker in ticker_list:
         ticker_cond = (df_portfolio['asset'] == ticker[:-4])
         if df_portfolio[ticker_cond].shape[0] > 0:
-            ticker_qty = float(df_portfolio[ticker_cond]['total_balance_crypto'])
+            ticker_qty = float(df_portfolio.loc[ticker_cond, "total_balance_crypto"].iloc[0])
         else:
-            ticker_qty = 0
+            ticker_qty = 0.0
         ticker_mid_price = float(price_map[ticker]['best_mid_price'])
         ticker_result[ticker] = {'ticker_qty': ticker_qty,
                                  'ticker_mid_price': ticker_mid_price,
