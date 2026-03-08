@@ -616,25 +616,31 @@ def terminal_cum_returns(qret: pd.DataFrame) -> pd.Series:
     return cum.iloc[-1]
 
 
-def plot_ic_term_structure(ax, ic_ts: pd.DataFrame, title: str = "IC term structure"):
+def plot_ic_term_structure(
+    ax,
+    ic_ts: pd.DataFrame | None,
+    title: str = "IC term structure (full universe)",
+):
     if ic_ts is None or ic_ts.empty:
         ax.set_title(title + " (no data)")
+        ax.set_xlabel("Forward horizon (days)")
+        ax.set_ylabel("Mean IC (Spearman)")
         return
 
     x = ic_ts.index.values
 
-    # Left axis: IC mean
+    # Left axis: mean IC
     ax.plot(
         x,
         ic_ts["IC_mean"].values,
         marker="o",
-        lw=1.7,
+        lw=1.8,
         color="tab:blue",
-        label="IC_mean",
+        label="Mean IC",
     )
     ax.axhline(0.0, lw=1.0, color="gray")
-    ax.set_xlabel("Horizon (days)")
-    ax.set_ylabel("Mean IC")
+    ax.set_xlabel("Forward horizon (days)")
+    ax.set_ylabel("Mean IC (Spearman)")
     ax.set_title(title)
     ax.grid(True, alpha=0.25)
 
@@ -644,12 +650,12 @@ def plot_ic_term_structure(ax, ic_ts: pd.DataFrame, title: str = "IC term struct
         x,
         ic_ts["ICIR"].values,
         marker="s",
-        lw=1.5,
+        lw=1.6,
         linestyle="--",
         color="tab:orange",
         label="ICIR",
     )
-    ax2.set_ylabel("ICIR")
+    ax2.set_ylabel("IC Information Ratio")
 
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = ax2.get_legend_handles_labels()
@@ -659,34 +665,44 @@ def plot_ic_term_structure(ax, ic_ts: pd.DataFrame, title: str = "IC term struct
 def plot_quantile_term_structure(
     ax,
     qts: pd.DataFrame | None,
-    title: str = "Quintile / spread term structure (EW)",
+    title: str = "Quintile return / spread term structure (EW)",
 ):
+    """
+    Left axis:
+        mean forward return for Q1..Q5
+    Right axis:
+        mean Q5-Q1 spread
+    """
     if qts is None or qts.empty:
         ax.set_title(title + " (no data)")
+        ax.set_xlabel("Forward horizon (days)")
+        ax.set_ylabel("Mean forward return")
         return
 
     qcols = [c for c in ["Q1", "Q2", "Q3", "Q4", "Q5"] if c in qts.columns]
     x = qts.index.values
 
-    qts[qcols].plot(ax=ax, lw=1.4, marker="o")
+    # Left axis: quintile mean returns
+    qts[qcols].plot(ax=ax, lw=1.5, marker="o")
     ax.axhline(0.0, lw=1.0, color="gray")
-    ax.set_xlabel("Horizon (days)")
-    ax.set_ylabel("Mean quintile return")
+    ax.set_xlabel("Forward horizon (days)")
+    ax.set_ylabel("Mean forward return")
     ax.set_title(title)
     ax.grid(True, alpha=0.25)
 
+    # Right axis: spread
     if "Q5_minus_Q1" in qts.columns:
         ax2 = ax.twinx()
         ax2.plot(
             x,
             qts["Q5_minus_Q1"].values,
-            lw=1.6,
+            lw=1.7,
             linestyle="--",
             marker="s",
             color="black",
-            label="Q5-Q1",
+            label="Q5 - Q1 spread",
         )
-        ax2.set_ylabel("Q5-Q1 spread")
+        ax2.set_ylabel("Mean Q5 - Q1 spread")
 
         h1, l1 = ax.get_legend_handles_labels()
         h2, l2 = ax2.get_legend_handles_labels()
@@ -762,7 +778,8 @@ def plot_factor_tearsheet_grid(
     })
     _cum_simple_df(spreads).plot(ax=ax, lw=1.5)
     ax.set_title("Cumulative Q5–Q1 spread (EW vs AW)")
-    ax.set_xlabel("")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Cumulative simple return")
     _style(ax)
 
     # --------------------------------------------------------
@@ -771,7 +788,8 @@ def plot_factor_tearsheet_grid(
     ax = axes[1]
     out["counts"].plot(ax=ax, lw=1.5)
     ax.set_title("Eligible names (count)")
-    ax.set_xlabel("")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Number of eligible assets")
     _style(ax)
 
     # --------------------------------------------------------
@@ -780,7 +798,8 @@ def plot_factor_tearsheet_grid(
     ax = axes[2]
     _cum_simple_df(out["qret_ew"]).plot(ax=ax, lw=1.5)
     ax.set_title("Cumulative returns by quintile (Equal Weight)")
-    ax.set_xlabel("")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Cumulative simple return")
     _style(ax)
 
     # --------------------------------------------------------
@@ -789,7 +808,8 @@ def plot_factor_tearsheet_grid(
     ax = axes[3]
     _cum_simple_df(out["qret_aw"]).plot(ax=ax, lw=1.5)
     ax.set_title("Cumulative returns by quintile (Alpha Weight)")
-    ax.set_xlabel("")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Cumulative simple return")
     _style(ax)
 
     # --------------------------------------------------------
@@ -802,7 +822,8 @@ def plot_factor_tearsheet_grid(
     }).plot(ax=ax, lw=1.5)
     ax.axhline(0.0, lw=1.0, color="gray")
     ax.set_title("Rolling IR / Sharpe of spread (EW vs AW)")
-    ax.set_xlabel("")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Rolling IR / Sharpe")
     _style(ax)
 
     # --------------------------------------------------------
@@ -819,6 +840,7 @@ def plot_factor_tearsheet_grid(
     ax.bar(x - bar_w / 2, means.values, width=bar_w, label="Mean_fwd_ret")
     ax.set_xticks(x)
     ax.set_xticklabels(means.index)
+    ax.set_xlabel("Quintile")
     ax.set_ylabel("Mean forward return")
     ax.grid(True, axis="y", alpha=0.25)
 
@@ -845,7 +867,8 @@ def plot_factor_tearsheet_grid(
     out["score_quantile_lines"].plot(ax=ax, lw=1.4)
     ax.axhline(0.0, lw=1.0, color="gray")
     ax.set_title("Cross-sectional score quantiles over time")
-    ax.set_xlabel("")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Cross-sectional z-score")
     _style(ax)
 
     # --------------------------------------------------------
@@ -854,7 +877,7 @@ def plot_factor_tearsheet_grid(
     ax = axes[7]
     out["mean_score_by_asset"].plot(kind="hist", bins=40, ax=ax)
     ax.set_title("Distribution: mean z-score by asset")
-    ax.set_xlabel("Mean z-score")
+    ax.set_xlabel("Mean z-score by asset")
     ax.set_ylabel("Frequency")
     ax.grid(True, axis="y", alpha=0.25)
 
@@ -862,13 +885,13 @@ def plot_factor_tearsheet_grid(
     # Row 5, Col 1: IC term structure
     # --------------------------------------------------------
     ax = axes[8]
-    plot_ic_term_structure(ax, ic_ts, title="IC term structure")
+    plot_ic_term_structure(ax, ic_ts, title="IC term structure (full universe)")
 
     # --------------------------------------------------------
     # Row 5, Col 2: quintile/spread term structure
     # --------------------------------------------------------
     ax = axes[9]
-    plot_quantile_term_structure(ax, qts_ew, title="Quintile / spread term structure (EW)")
+    plot_quantile_term_structure(ax, qts_ew, title="Quintile return / spread term structure (EW)")
 
     # --------------------------------------------------------
     # Tidy legends
