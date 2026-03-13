@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
+import glob
+import os
 
 # ============================================================
 # 0) Small utilities
@@ -710,18 +711,173 @@ def plot_quantile_term_structure(
     else:
         ax.legend(fontsize=8, loc="best")
 
+# ============================================================
+# 13) Rolling Beta Stats to Large Cap Cryptos
+# ============================================================
+def build_benchmark_return_panel(
+    df: pd.DataFrame,
+    benchmark_assets: list[str],
+    asset_col: str = "asset",
+    time_col: str = "time",
+    ret_col: str = "fwd_ret",
+) -> pd.DataFrame:
+    """
+    Build a wide panel of benchmark forward returns from df_eval.
+    Expects df to already be on the rebalance grid.
+    """
+    need = [time_col, asset_col, ret_col]
+    work = df[need].copy()
+    work = work[work[asset_col].isin(benchmark_assets)].copy()
+
+    out = (
+        work.pivot(index=time_col, columns=asset_col, values=ret_col)
+            .sort_index()
+    )
+    return out
+
+
+def rolling_beta(
+    y: pd.Series,
+    x: pd.Series,
+    window: int,
+    min_periods: int | None = None,
+) -> pd.Series:
+    """
+    Rolling beta of y to x:
+        beta = cov(y, x) / var(x)
+    """
+    y = pd.Series(y).astype(float)
+    x = pd.Series(x).astype(float)
+
+    if min_periods is None:
+        min_periods = max(10, int(0.6 * window))
+        min_periods = min(min_periods, window)
+
+    cov_yx = y.rolling(window, min_periods=min_periods).cov(x)
+    var_x = x.rolling(window, min_periods=min_periods).var()
+
+    beta = cov_yx / var_x
+    beta.name = f"beta_to_{x.name}"
+    return beta
+
+
+def rolling_corr(
+    y: pd.Series,
+    x: pd.Series,
+    window: int,
+    min_periods: int | None = None,
+) -> pd.Series:
+    y = pd.Series(y).astype(float)
+    x = pd.Series(x).astype(float)
+
+    if min_periods is None:
+        min_periods = max(10, int(0.6 * window))
+        min_periods = min(min_periods, window)
+
+    corr = y.rolling(window, min_periods=min_periods).corr(x)
+    corr.name = f"corr_to_{x.name}"
+    return corr
+
+
+def rolling_beta_panel(
+    portfolio_ret: pd.Series,
+    benchmark_rets: pd.DataFrame,
+    window: int,
+    min_periods: int | None = None,
+) -> pd.DataFrame:
+    """
+    Rolling beta of one portfolio return series to many benchmarks.
+    """
+    cols = {}
+    for c in benchmark_rets.columns:
+        aligned = pd.concat([portfolio_ret.rename("y"), benchmark_rets[c].rename(c)], axis=1).dropna()
+        beta = rolling_beta(aligned["y"], aligned[c], window=window, min_periods=min_periods)
+        cols[c] = beta
+    return pd.DataFrame(cols)
+
+
+def rolling_corr_panel(
+    portfolio_ret: pd.Series,
+    benchmark_rets: pd.DataFrame,
+    window: int,
+    min_periods: int | None = None,
+) -> pd.DataFrame:
+    """
+    Rolling correlation of one portfolio return series to many benchmarks.
+    """
+    cols = {}
+    for c in benchmark_rets.columns:
+        aligned = pd.concat([portfolio_ret.rename("y"), benchmark_rets[c].rename(c)], axis=1).dropna()
+        corr = rolling_corr(aligned["y"], aligned[c], window=window, min_periods=min_periods)
+        cols[c] = corr
+    return pd.DataFrame(cols)
+
+
+def make_sleeve_return_dict(out: dict) -> dict[str, pd.Series]:
+    """
+    Convenient sleeves to inspect.
+    """
+    return {
+        "TopQ_EW": out["qret_ew"]["Q5"].rename("TopQ_EW"),
+        "TopQ_AW": out["qret_aw"]["Q5"].rename("TopQ_AW"),
+        "Spread_EW": out["spread_ew"].rename("Spread_EW"),
+        "Spread_AW": out["spread_aw"].rename("Spread_AW"),
+    }
+
+
+def plot_beta_diagnostics(
+    beta_df: pd.DataFrame,
+    corr_df: pd.DataFrame | None = None,
+    title: str = "",
+    figsize: tuple[int, int] = (14, 6),
+):
+    """
+    Two-panel figure:
+      left  = rolling beta
+      right = rolling correlation
+    """
+    fig, axes = plt.subplots(1, 2, figsize=figsize, constrained_layout=True)
+
+    # left: beta
+    ax = axes[0]
+    beta_df.plot(ax=ax, lw=1.5)
+    ax.axhline(0.0, lw=1.0, color="gray")
+    ax.set_title("Rolling beta")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Beta")
+    ax.grid(True, alpha=0.25)
+
+    # right: corr
+    ax = axes[1]
+    if corr_df is not None and not corr_df.empty:
+        corr_df.plot(ax=ax, lw=1.5)
+        ax.axhline(0.0, lw=1.0, color="gray")
+        ax.set_title("Rolling correlation")
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Correlation")
+        ax.grid(True, alpha=0.25)
+    else:
+        ax.axis("off")
+
+    if title:
+        fig.suptitle(title, fontsize=13)
+
+    plt.show()
+
 
 # ============================================================
-# 13) Main tear-sheet plot
+# 14) Main tear-sheet plot
 # ============================================================
 def plot_factor_tearsheet_grid(
     out: dict,
     title: str = "",
     ic_ts: pd.DataFrame | None = None,
     qts_ew: pd.DataFrame | None = None,
+    beta_df: pd.DataFrame | None = None,
+    corr_df: pd.DataFrame | None = None,
     summary_table: pd.DataFrame | None = None,
     summary_title: str | None = None,
-    figsize: tuple[int, int] = (18, 21),
+    figsize: tuple[int, int] = (18, 24),
 ):
     """
     Layout:
@@ -731,17 +887,28 @@ def plot_factor_tearsheet_grid(
       Row 3: rolling IR              | quintile bars
       Row 4: score quantiles         | score distribution
       Row 5: IC term structure       | quintile/spread term structure
+      Row 6: rolling beta            | rolling correlation   (optional)
     """
     has_summary = summary_table is not None
+    has_beta_row = (beta_df is not None) or (corr_df is not None)
+
+    plot_rows = 6 if has_beta_row else 5
+    total_rows = plot_rows + (1 if has_summary else 0)
 
     if has_summary:
-        fig = plt.figure(figsize=figsize, constrained_layout=True)
-        gs = fig.add_gridspec(
-            nrows=6,
-            ncols=2,
-            height_ratios=[2.4, 4.2, 4.2, 4.2, 4.2, 4.2],
-        )
+        height_ratios = [2.4] + [4.2] * plot_rows
+    else:
+        height_ratios = [4.2] * plot_rows
 
+    fig = plt.figure(figsize=figsize, constrained_layout=True)
+    gs = fig.add_gridspec(
+        nrows=total_rows,
+        ncols=2,
+        height_ratios=height_ratios,
+    )
+
+    row_offset = 0
+    if has_summary:
         ax_text = fig.add_subplot(gs[0, :])
         ax_text.axis("off")
         txt = summary_table_to_text(summary_table, title=summary_title)
@@ -752,16 +919,12 @@ def plot_factor_tearsheet_grid(
             ha="left",
             va="top",
             family="monospace",
-            fontsize=8.5,
+            fontsize=10,
         )
         row_offset = 1
-    else:
-        fig = plt.figure(figsize=(figsize[0], figsize[1] - 3), constrained_layout=True)
-        gs = fig.add_gridspec(nrows=5, ncols=2)
-        row_offset = 0
 
     axes = []
-    for r in range(5):
+    for r in range(plot_rows):
         for c in range(2):
             axes.append(fig.add_subplot(gs[r + row_offset, c]))
 
@@ -894,6 +1057,34 @@ def plot_factor_tearsheet_grid(
     plot_quantile_term_structure(ax, qts_ew, title="Quintile return / spread term structure (EW)")
 
     # --------------------------------------------------------
+    # Row 6: beta diagnostics (optional)
+    # --------------------------------------------------------
+    if has_beta_row:
+        # Left: rolling beta
+        ax = axes[10]
+        if beta_df is not None and not beta_df.empty:
+            beta_df.plot(ax=ax, lw=1.5)
+            ax.axhline(0.0, lw=1.0, color="gray")
+            ax.set_title("Top Quintile Rolling beta to benchmarks")
+            ax.set_xlabel("Time")
+            ax.set_ylabel("Beta")
+            _style(ax)
+        else:
+            ax.axis("off")
+
+        # Right: rolling correlation
+        ax = axes[11]
+        if corr_df is not None and not corr_df.empty:
+            corr_df.plot(ax=ax, lw=1.5)
+            ax.axhline(0.0, lw=1.0, color="gray")
+            ax.set_title("Top Quintile Rolling correlation to benchmarks")
+            ax.set_xlabel("Time")
+            ax.set_ylabel("Correlation")
+            _style(ax)
+        else:
+            ax.axis("off")
+
+    # --------------------------------------------------------
     # Tidy legends
     # --------------------------------------------------------
     for ax in axes:
@@ -905,3 +1096,285 @@ def plot_factor_tearsheet_grid(
         fig.suptitle(title, fontsize=14, y=0.998)
 
     plt.show()
+
+
+BAR_HOURS = 4
+
+# ============================================================
+# Data loading / prep helpers
+# ============================================================
+def list_parquets(folder: str) -> list[str]:
+   return sorted(glob.glob(os.path.join(folder, "*.parquet")))
+
+
+def load_long_bar_end(folder: str, bar_hours: int = 4) -> pd.DataFrame:
+   frames = []
+   for fp in list_parquets(folder):
+       if os.path.basename(fp) == "manifest.csv":
+           continue
+
+       df = pd.read_parquet(fp)
+       df.index = pd.to_datetime(df.index, utc=True)
+
+       altname = os.path.basename(fp).split("__")[-2]
+       tmp = df.copy()
+       tmp["altname"] = altname
+       frames.append(tmp.reset_index(names="time_start"))
+
+   out = (
+       pd.concat(frames, ignore_index=True)
+         .drop_duplicates(["time_start", "altname"], keep="last")
+   )
+   out["time"] = pd.to_datetime(out["time_start"], utc=True) + pd.Timedelta(hours=bar_hours)
+   out = out.drop(columns=["time_start"]).sort_values(["altname", "time"]).reset_index(drop=True)
+   return out
+
+
+def filter_in_sample(df: pd.DataFrame, is_end: str) -> pd.DataFrame:
+   end = pd.Timestamp(is_end, tz="UTC")
+   return df[df["time"] < end].copy()
+
+
+def filter_min_bars(df: pd.DataFrame, min_bars: int) -> pd.DataFrame:
+   counts = df.groupby("altname")["time"].count()
+   keep = counts[counts >= min_bars].index
+   return df[df["altname"].isin(keep)].copy()
+
+
+def add_log_close(df: pd.DataFrame) -> pd.DataFrame:
+   out = df.copy()
+   out["log_close"] = np.log(out["close"])
+   return out
+
+
+def add_forward_log_return(df: pd.DataFrame, horizon_bars: int, out_col: str) -> pd.DataFrame:
+   out = df.copy()
+   out[out_col] = out.groupby("altname")["log_close"].shift(-horizon_bars) - out["log_close"]
+   return out
+
+
+def rebalance_times(df: pd.DataFrame, cut_hour_utc: int = 0, every_n_days: int = 1) -> pd.DatetimeIndex:
+   times = pd.DatetimeIndex(df["time"].unique()).sort_values()
+   daily = times[times.hour == cut_hour_utc]
+   return daily[::every_n_days]
+
+
+def restrict_to_times(df: pd.DataFrame, times: pd.DatetimeIndex) -> pd.DataFrame:
+   tset = set(pd.DatetimeIndex(times))
+   return df[df["time"].isin(tset)].copy()
+
+
+# ============================================================
+# Generic factor evaluation wrapper
+# ============================================================
+def evaluate_factor_workflow(
+   *,
+   folder: str,
+   factor_builder,
+   factor_name: str,
+   is_end: str = "2025-04-01",
+   min_bars: int = 2000,
+   cut_hour: int = 0,
+   every_n_days: int = 1,
+   bar_hours: int = 4,
+   main_horizon_days: int | None = None,
+   horizon_days_list: list[int] | None = None,
+   cost_bps: float = 20.0,
+   benchmark_assets: list[str] | None = None,
+   beta_sleeve: str = "TopQ_EW",   # TopQ_EW, TopQ_AW, Spread_EW, Spread_AW
+   n_q: int = 5,
+   min_names: int = 20,
+   rolling_years: float = 0.5,
+   plot: bool = True,
+) -> dict:
+   """
+   Generic orchestrator for factor evaluation.
+
+   factor_builder:
+       callable(df) -> (df_with_factor, factor_col)
+
+   Example factor_builder:
+       def build_mom_42(df):
+           out = df.copy()
+           out["mom_42"] = out["log_close"] - out.groupby("altname")["log_close"].shift(42)
+           return out, "mom_42"
+   """
+   if horizon_days_list is None:
+       horizon_days_list = [1, 2, 3, 5, 7, 10, 14]
+
+   bars_per_day = int(round(24 / bar_hours))
+
+   if main_horizon_days is None:
+       main_horizon_days = every_n_days
+
+   main_horizon_bars = bars_per_day * main_horizon_days
+   horizon_bars_list = [d * bars_per_day for d in horizon_days_list]
+   all_horizon_bars = sorted(set(horizon_bars_list + [main_horizon_bars]))
+
+   # --------------------------------------------------------
+   # Load and prepare raw panel
+   # --------------------------------------------------------
+   df = load_long_bar_end(folder, bar_hours=bar_hours)
+   df = filter_in_sample(df, is_end)
+   df = filter_min_bars(df, min_bars)
+   df = add_log_close(df)
+
+   # --------------------------------------------------------
+   # Build factor
+   # --------------------------------------------------------
+   df, factor_col = factor_builder(df)
+
+   # --------------------------------------------------------
+   # Build all forward return horizons
+   # --------------------------------------------------------
+   for h in all_horizon_bars:
+       log_col = f"fwd_{h}"
+       simple_col = f"fwd_{h}_simple"
+
+       df = add_forward_log_return(df, horizon_bars=h, out_col=log_col)
+       df[simple_col] = np.exp(df[log_col]) - 1.0
+
+   # --------------------------------------------------------
+   # Rebalance panel
+   # --------------------------------------------------------
+   times = rebalance_times(df, cut_hour_utc=cut_hour, every_n_days=every_n_days)
+   df_reb = restrict_to_times(df, times)
+
+   df_eval = df_reb.rename(columns={"altname": "asset"}).copy()
+   df_eval["fwd_ret"] = df_eval[f"fwd_{main_horizon_bars}_simple"]
+
+   bars_per_year = 365.0 / every_n_days
+
+   # --------------------------------------------------------
+   # Core tear-sheet outputs
+   # --------------------------------------------------------
+   out = evaluate_factor_core(
+       df_eval,
+       factor_col=factor_col,
+       ret_col="fwd_ret",
+       eligible_col=None,
+       n_q=n_q,
+       min_names=min_names,
+       bars_per_year=bars_per_year,
+       rolling_years=rolling_years,
+   )
+
+   ic_ts = ic_term_structure(
+       df=df_eval,
+       factor_col=factor_col,
+       horizon_bars_list=horizon_bars_list,
+       bar_hours=bar_hours,
+       decision_every_n_days=every_n_days,
+       non_overlapping=True,
+   )
+
+   qts_ew = quantile_term_structure(
+       df=df_eval,
+       factor_col=factor_col,
+       horizon_bars_list=horizon_bars_list,
+       bar_hours=bar_hours,
+       weight_mode="ew",
+       n_q=n_q,
+       min_names=min_names,
+   )
+
+   qts_aw = quantile_term_structure(
+       df=df_eval,
+       factor_col=factor_col,
+       horizon_bars_list=horizon_bars_list,
+       bar_hours=bar_hours,
+       weight_mode="aw",
+       n_q=n_q,
+       min_names=min_names,
+   )
+
+   # --------------------------------------------------------
+   # Summary table
+   # --------------------------------------------------------
+   stats_ew = factor_summary_stats(
+       out,
+       ann_factor=out["bars_per_year"],
+       cost_bps_assumed=cost_bps,
+       use_quantile_returns="ew",
+   )
+
+   stats_aw = factor_summary_stats(
+       out,
+       ann_factor=out["bars_per_year"],
+       cost_bps_assumed=cost_bps,
+       use_quantile_returns="aw",
+   )
+
+   summary_table = factor_summary_table(stats_ew, stats_aw)
+
+   # --------------------------------------------------------
+   # Optional benchmark beta diagnostics
+   # --------------------------------------------------------
+   beta_df = None
+   corr_df = None
+
+   if benchmark_assets:
+       bench_rets = build_benchmark_return_panel(
+           df_eval,
+           benchmark_assets=benchmark_assets,
+           asset_col="asset",
+           time_col="time",
+           ret_col="fwd_ret",
+       )
+
+       sleeves = make_sleeve_return_dict(out)
+
+       if beta_sleeve not in sleeves:
+           raise ValueError(f"Unknown beta_sleeve: {beta_sleeve}. Must be one of {list(sleeves.keys())}")
+
+       target_ret = sleeves[beta_sleeve]
+       window = out["window"]
+       min_periods = max(10, int(0.6 * window))
+
+       beta_df = rolling_beta_panel(
+           target_ret,
+           bench_rets,
+           window=window,
+           min_periods=min_periods,
+       )
+
+       corr_df = rolling_corr_panel(
+           target_ret,
+           bench_rets,
+           window=window,
+           min_periods=min_periods,
+       )
+
+   # --------------------------------------------------------
+   # Plot
+   # --------------------------------------------------------
+   if plot:
+       plot_factor_tearsheet_grid(
+           out,
+           title=f"Factor tear sheet | {factor_name} | main_h={main_horizon_bars} bars",
+           ic_ts=ic_ts,
+           qts_ew=qts_ew,
+           beta_df=beta_df,
+           corr_df=corr_df,
+           summary_table=summary_table,
+           summary_title="=== Factor Test Summary (EW vs AW) ===",
+       )
+
+   return {
+       "df_raw": df,
+       "df_reb": df_reb,
+       "df_eval": df_eval,
+       "factor_col": factor_col,
+       "factor_name": factor_name,
+       "main_horizon_bars": main_horizon_bars,
+       "horizon_bars_list": horizon_bars_list,
+       "out": out,
+       "ic_ts": ic_ts,
+       "qts_ew": qts_ew,
+       "qts_aw": qts_aw,
+       "stats_ew": stats_ew,
+       "stats_aw": stats_aw,
+       "summary_table": summary_table,
+       "beta_df": beta_df,
+       "corr_df": corr_df,
+   }
