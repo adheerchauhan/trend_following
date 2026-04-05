@@ -154,11 +154,11 @@ def quintile_returns_equal_weight(
 ) -> pd.DataFrame:
     out = (
         df.dropna(subset=[q_col, ret_col])
-          .groupby(["time", q_col])[ret_col]
-          .mean()
-          .unstack(q_col)
-          .reindex(columns=range(1, n_q + 1))
-          .sort_index()
+        .groupby(["time", q_col])[ret_col]
+        .mean()
+        .unstack(q_col)
+        .reindex(columns=range(1, n_q + 1))
+        .sort_index()
     )
     out.columns = [f"Q{int(c)}" for c in out.columns]
     return out
@@ -282,8 +282,8 @@ def evaluate_factor_core(
     qret_ew = quintile_returns_equal_weight(work, q_col="q", ret_col=ret_col, n_q=n_q)
     qret_aw = quintile_returns_alpha_weighted(work, q_col="q", score_col="z", ret_col=ret_col, n_q=n_q)
 
-    spread_ew = top_minus_bottom(qret_ew, top=f"Q{n_q}", bottom="Q1").rename("Q5-Q1_EW")
-    spread_aw = top_minus_bottom(qret_aw, top=f"Q{n_q}", bottom="Q1").rename("Q5-Q1_AW")
+    spread_ew = top_minus_bottom(qret_ew, top=f"Q{n_q}", bottom="Q1").rename("Qtop-Q1_EW")
+    spread_aw = top_minus_bottom(qret_aw, top=f"Q{n_q}", bottom="Q1").rename("Qtop-Q1_AW")
 
     preferred = int(round(rolling_years * bars_per_year))
     n_ew = int(spread_ew.dropna().shape[0])
@@ -316,6 +316,8 @@ def evaluate_factor_core(
         "mean_score_by_asset": mean_score_by_asset,
         "window": window,
         "bars_per_year": float(bars_per_year),
+        "n_q": int(n_q),
+        "min_names": int(min_names),
     }
 
 
@@ -376,27 +378,55 @@ def topq_turnover_series(
     return pd.Series(vals, index=times, name=f"topQ_turnover_{weight_mode}").sort_index()
 
 
+def _sign_or_nan(x: float) -> float:
+    if pd.isna(x):
+        return np.nan
+    if x > 0:
+        return 1.0
+    if x < 0:
+        return -1.0
+    return 0.0
+
+
 def factor_summary_stats(
     out: dict,
     ann_factor: float,
     cost_bps_assumed: float = 20.0,
-    min_names_for_ic: int = 15,
+    min_names_for_ic: int | None = None,              # CHANGED
     use_quantile_returns: str = "ew",
+    align_ic_with_spread_times: bool = True,          # CHANGED
 ) -> pd.Series:
     work = out["work"]
     counts = out["counts"]
     window = out["window"]
 
+    # --- CHANGED: dynamic n_q/top label ---
+    n_q = int(out.get("n_q", 5))
+    top_label = f"Q{n_q}"
+    bottom_label = "Q1"
+
+    # --- CHANGED: default IC min_names to same as quantile construction ---
+    if min_names_for_ic is None:
+        min_names_for_ic = int(out.get("min_names", 15))
+
     qret = out["qret_ew"] if use_quantile_returns == "ew" else out["qret_aw"]
     spread = out["spread_ew"] if use_quantile_returns == "ew" else out["spread_aw"]
 
     ic = ic_time_series(work, score_col="z", ret_col="fwd_ret", min_names=min_names_for_ic, method="spearman")
-    ic_mean = float(ic.mean(skipna=True))
-    ic_t = _t_stat(ic)
-    ic_sd = float(ic.std(ddof=1))
+
+    # --- CHANGED: align IC sample to spread sample timestamps (optional) ---
+    if align_ic_with_spread_times:
+        valid_spread_times = spread.dropna().index
+        ic_used = ic.reindex(valid_spread_times)
+    else:
+        ic_used = ic
+
+    ic_mean = float(ic_used.mean(skipna=True))
+    ic_t = _t_stat(ic_used)
+    ic_sd = float(ic_used.std(ddof=1))
     ic_ir = float(ic_mean / ic_sd) if (ic_sd > 0 and not np.isnan(ic_sd)) else np.nan
 
-    q_means = qret.mean().reindex([f"Q{i}" for i in range(1, 6)])
+    q_means = qret.mean().reindex([f"Q{i}" for i in range(1, n_q + 1)])
     mono = _spearman_corr(pd.Series(range(1, len(q_means) + 1)), q_means.values)
 
     spread_mean = float(spread.mean(skipna=True))
@@ -404,12 +434,12 @@ def factor_summary_stats(
     spread_ir = _sharpe_like(spread, ann_factor=ann_factor)
     spread_risk = _ann_vol(spread, ann_factor=ann_factor)
 
-    topq = qret["Q5"]
+    topq = qret[top_label]
     topq_mean = float(topq.mean(skipna=True))
     topq_sharpe = _sharpe_like(topq, ann_factor=ann_factor)
     topq_risk = _ann_vol(topq, ann_factor=ann_factor)
 
-    turn = topq_turnover_series(work, top_q=5, q_col="q", score_col="z", weight_mode=use_quantile_returns)
+    turn = topq_turnover_series(work, top_q=n_q, q_col="q", score_col="z", weight_mode=use_quantile_returns)
     topq_turn_mean = float(turn.mean(skipna=True))
 
     cost_per_period = (cost_bps_assumed / 1e4) * turn.reindex(topq.index)
@@ -421,6 +451,26 @@ def factor_summary_stats(
     eligible_med = float(counts.median(skipna=True))
     eligible_min = float(counts.min(skipna=True))
 
+    # --- CHANGED: diagnostic consistency fields ---
+    ic_non_na_n = int(ic_used.dropna().shape[0])
+    spread_non_na_n = int(spread.dropna().shape[0])
+
+    overlap_idx = ic_used.dropna().index.intersection(spread.dropna().index)
+    overlap_n = int(len(overlap_idx))
+
+    if overlap_n > 0:
+        ic_mean_overlap = float(ic_used.reindex(overlap_idx).mean())
+        spread_mean_overlap = float(spread.reindex(overlap_idx).mean())
+        sign_ic = _sign_or_nan(ic_mean_overlap)
+        sign_spread = _sign_or_nan(spread_mean_overlap)
+        sign_agree = float(sign_ic == sign_spread) if (not pd.isna(sign_ic) and not pd.isna(sign_spread)) else np.nan
+    else:
+        ic_mean_overlap = np.nan
+        spread_mean_overlap = np.nan
+        sign_ic = np.nan
+        sign_spread = np.nan
+        sign_agree = np.nan
+
     return pd.Series({
         "n_rebalance_times": n_rebalance_times,
         "eligible_names_median": eligible_med,
@@ -430,8 +480,8 @@ def factor_summary_stats(
         "IC_t": ic_t,
         "ICIR": ic_ir,
         "quintile_monotonicity_spearman": mono,
-        "Q5_minus_Q1_mean": spread_mean,
-        "Q5_minus_Q1_t": spread_t,
+        "Qtop_minus_Q1_mean": spread_mean,            # CHANGED label
+        "Qtop_minus_Q1_t": spread_t,                  # CHANGED label
         "spread_IR_or_Sharpe": spread_ir,
         "spread_Risk_ann_vol": spread_risk,
         "topQ_mean": topq_mean,
@@ -441,6 +491,18 @@ def factor_summary_stats(
         "cost_bps_assumed": float(cost_bps_assumed),
         "topQ_net_mean": topq_net_mean,
         "topQ_net_sharpe_like": topq_net_sharpe,
+
+        # --- CHANGED: diagnostics (will print in summary table) ---
+        "diag_n_q": float(n_q),
+        "diag_ic_min_names_used": float(min_names_for_ic),
+        "diag_ic_n_obs": float(ic_non_na_n),
+        "diag_spread_n_obs": float(spread_non_na_n),
+        "diag_ic_spread_overlap_n_obs": float(overlap_n),
+        "diag_ic_mean_on_overlap": ic_mean_overlap,
+        "diag_spread_mean_on_overlap": spread_mean_overlap,
+        "diag_ic_sign_on_overlap": sign_ic,
+        "diag_spread_sign_on_overlap": sign_spread,
+        "diag_ic_spread_sign_agree": sign_agree,      # 1=yes, 0=no
     })
 
 
@@ -1295,14 +1357,18 @@ def evaluate_factor_workflow(
        out,
        ann_factor=out["bars_per_year"],
        cost_bps_assumed=cost_bps,
+       min_names_for_ic=min_names,
        use_quantile_returns="ew",
+       align_ic_with_spread_times=True,
    )
 
    stats_aw = factor_summary_stats(
        out,
        ann_factor=out["bars_per_year"],
        cost_bps_assumed=cost_bps,
+       min_names_for_ic=min_names,
        use_quantile_returns="aw",
+       align_ic_with_spread_times=True,
    )
 
    summary_table = factor_summary_table(stats_ew, stats_aw)
